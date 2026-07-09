@@ -1,5 +1,6 @@
 #include "net/session.h"
 
+#include "game/play_reason.h"
 #include "game/rules.h"
 #include "game/snapshot.h"
 #include "net/protocol.h"
@@ -196,6 +197,11 @@ void NetSession::applyRemoteSnapshot(Match& match, const uint8_t* data, size_t s
 	lastSeenSync_ = match.syncGeneration;
 }
 
+void NetSession::setError(const char* msg)
+{
+	lastError_ = msg ? msg : "";
+}
+
 bool NetSession::canLocalAct(const Match& match) const
 {
 	if (match.phase != Phase::Playing) {
@@ -209,26 +215,43 @@ bool NetSession::canLocalAct(const Match& match) const
 
 bool NetSession::requestPlayCard(Match& match, int handIndex, int targetPlayer)
 {
+	clearError();
 	if (mode_ == AppMode::Client) {
-		if (!canLocalAct(match) || !clientSock_.valid()) {
+		if (!canLocalAct(match)) {
+			setError("Not your turn.");
+			return false;
+		}
+		if (!clientSock_.valid()) {
+			setError("Disconnected from host.");
+			return false;
+		}
+		const char* why = describeIllegalPlay(match, match.activePlayer, handIndex, targetPlayer);
+		if (why && why[0]) {
+			setError(why);
 			return false;
 		}
 		clientSendQ_.enqueue(net::FrameCodec::pack(net::makePlayCard(handIndex, targetPlayer)));
 		return true;
 	}
 
-	// Host or offline: only allow if it's a local-controlled seat's turn.
 	if (match.phase != Phase::Playing) {
+		setError(describeIllegalPlay(match, match.activePlayer, handIndex, targetPlayer));
 		return false;
 	}
 	const Player& ap = match.players[static_cast<size_t>(match.activePlayer)];
 	if (mode_ == AppMode::Host) {
 		if (match.activePlayer != localSeat_ || ap.control != SeatControl::HumanLocal) {
+			setError("Not your turn.");
 			return false;
 		}
 	}
-	// Offline hotseat: always act as active player.
+	const char* why = describeIllegalPlay(match, match.activePlayer, handIndex, targetPlayer);
+	if (why && why[0]) {
+		setError(why);
+		return false;
+	}
 	if (!applyCardPlay(match, handIndex, targetPlayer)) {
+		setError("Illegal play.");
 		return false;
 	}
 	bumpSync(match);

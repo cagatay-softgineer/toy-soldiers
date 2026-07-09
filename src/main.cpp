@@ -1,3 +1,4 @@
+#include "app/settings.h"
 #include "game/cosmetics.h"
 #include "game/match.h"
 #include "net/session.h"
@@ -21,14 +22,128 @@ toy::TableScene g_scene;
 toy::Draw3D g_draw;
 toy::Camera g_camera;
 toy::UiState g_ui;
+toy::Settings g_settings;
 bool g_dragging = false;
 float g_lastMouseX = 0.0f;
 float g_lastMouseY = 0.0f;
+bool g_hasScene = false;
 
 void rebuildScene()
 {
 	g_scene.create(g_match);
 	g_session.clearSceneFlag();
+	g_hasScene = true;
+}
+
+void destroyScene()
+{
+	g_scene.destroy();
+	g_hasScene = false;
+}
+
+void saveSettingsIfDirty()
+{
+	if (!g_ui.settingsDirty) {
+		return;
+	}
+	toy::uiCaptureSettings(g_ui, g_settings);
+	toy::settingsSave(g_settings);
+	g_ui.settingsDirty = false;
+}
+
+void applyCosmeticsToSeat0()
+{
+	toy::Cosmetics cos;
+	cos.plastic = static_cast<toy::PlasticColor>(g_ui.plasticIndex);
+	cos.towerSkin = static_cast<toy::TowerSkin>(g_ui.towerSkinIndex);
+	cos.accessory = static_cast<toy::Accessory>(g_ui.accessoryIndex);
+	g_session.requestSetCosmetics(g_match, cos);
+}
+
+void goMenu()
+{
+	g_session.shutdown(&g_match);
+	destroyScene();
+	g_match = toy::Match{};
+	g_ui.screen = toy::AppScreen::Menu;
+	g_ui.selectedHand = 0;
+	g_ui.pauseOpen = false;
+	saveSettingsIfDirty();
+}
+
+void startOfflineMatch()
+{
+	toy::MatchConfig cfg = toy::uiMakeConfig(g_ui, 100u + g_match.syncGeneration);
+	g_session.startOffline(g_match, cfg);
+	for (int i = 1; i < g_match.config.playerCount; ++i) {
+		g_match.players[static_cast<size_t>(i)].cosmetics = toy::defaultCosmeticsForSeat(i);
+	}
+	applyCosmeticsToSeat0();
+	rebuildScene();
+	g_ui.screen = toy::AppScreen::Match;
+	g_ui.selectedHand = 0;
+	g_ui.selectedTarget = 1;
+	g_ui.settingsDirty = true;
+	saveSettingsIfDirty();
+}
+
+void startHostLobby()
+{
+	toy::MatchConfig cfg = toy::uiMakeConfig(g_ui, 42u + g_match.syncGeneration);
+	std::snprintf(g_ui.hostName, sizeof(g_ui.hostName), "%s", g_ui.playerName);
+	if (!g_session.hostLobby(g_match, cfg, g_ui.hostName, static_cast<uint16_t>(g_ui.hostPort))) {
+		toy::uiPushToast(g_ui, g_session.status(), 3.0f);
+		g_ui.screen = toy::AppScreen::Menu;
+		return;
+	}
+	applyCosmeticsToSeat0();
+	rebuildScene();
+	g_ui.screen = toy::AppScreen::Lobby;
+	g_ui.selectedHand = 0;
+	g_ui.settingsDirty = true;
+	saveSettingsIfDirty();
+}
+
+void startJoin()
+{
+	if (!g_session.joinLobby(g_match, g_ui.joinHost, static_cast<uint16_t>(g_ui.joinPort), g_ui.playerName)) {
+		toy::uiPushToast(g_ui, g_session.status(), 3.0f);
+		g_ui.screen = toy::AppScreen::Menu;
+		return;
+	}
+	g_ui.screen = toy::AppScreen::Lobby;
+	g_ui.selectedHand = 0;
+	g_ui.settingsDirty = true;
+	saveSettingsIfDirty();
+}
+
+void processUiIntents()
+{
+	// selectedHand negative codes from menu/lobby (see ui.cpp)
+	const int intent = g_ui.selectedHand;
+	if (intent >= 0) {
+		return;
+	}
+	g_ui.selectedHand = 0;
+	switch (intent) {
+	case -2: // offline
+		startOfflineMatch();
+		break;
+	case -3: // host
+		startHostLobby();
+		break;
+	case -4: // join
+		startJoin();
+		break;
+	case -5: // start offline from empty lobby (unused if we start immediately)
+		startOfflineMatch();
+		break;
+	case -6: // leave to menu
+		goMenu();
+		break;
+	default:
+		break;
+	}
 }
 
 void init()
@@ -41,14 +156,13 @@ void init()
 	toy::uiInit();
 	g_draw.init();
 
-	toy::MatchConfig cfg;
-	cfg.playerCount = 4;
-	cfg.freeTargeting = true;
-	cfg.seed = 42;
-	cfg.fillEmptyWithAI = true;
-	g_session.startOffline(g_match, cfg);
-	rebuildScene();
-	g_ui.selectedTarget = 1;
+	if (toy::settingsLoad(g_settings)) {
+		toy::uiApplySettings(g_ui, g_settings);
+	}
+	g_ui.screen = toy::AppScreen::Menu;
+	if (g_ui.showHowToPlay) {
+		// first run help
+	}
 }
 
 void frame()
@@ -57,29 +171,53 @@ void frame()
 	const int h = sapp_height();
 	const double dt = sapp_frame_duration();
 
+	processUiIntents();
 	g_session.update(g_match);
 
+	// Client: rebuild when snapshot says so
 	if (g_session.sceneNeedsRebuild()) {
 		rebuildScene();
 	}
 
-	// M5: gentle auto-orbit when not dragging the camera.
-	if (!g_dragging && g_ui.autoOrbit && !g_ui.showHowToPlay) {
-		g_camera.tickIdle(static_cast<float>(dt), true);
+	// Auto screen transitions for multiplayer
+	if (g_ui.screen == toy::AppScreen::Lobby && g_match.phase == toy::Phase::Playing) {
+		g_ui.screen = toy::AppScreen::Match;
+		if (!g_hasScene) {
+			rebuildScene();
+		}
+	}
+	if (g_ui.screen == toy::AppScreen::Match && g_match.phase == toy::Phase::GameOver) {
+		g_ui.screen = toy::AppScreen::Results;
 	}
 
-	g_scene.consumeImpulse(g_match);
-	g_scene.step(static_cast<float>(dt));
-	g_scene.syncFromMatch(g_match);
+	const bool in3d = (g_ui.screen == toy::AppScreen::Lobby || g_ui.screen == toy::AppScreen::Match ||
+					   g_ui.screen == toy::AppScreen::Results) &&
+					  g_hasScene;
 
-	// 3D pass (map-tinted clear color for room atmosphere)
+	if (in3d) {
+		if (!g_dragging && g_ui.autoOrbit && !g_ui.showHowToPlay && !g_ui.pauseOpen) {
+			g_camera.tickIdle(static_cast<float>(dt), true);
+		}
+		g_scene.consumeImpulse(g_match);
+		g_scene.step(static_cast<float>(dt));
+		g_scene.syncFromMatch(g_match);
+	}
+
 	float cr = 0.07f, cg = 0.09f, cb = 0.14f;
-	toy::mapClearColor(g_match.config.mapId, cr, cg, cb);
+	if (in3d) {
+		toy::mapClearColor(g_match.config.mapId, cr, cg, cb);
+	} else {
+		// Menu backdrop
+		cr = 0.06f;
+		cg = 0.07f;
+		cb = 0.12f;
+	}
 	g_draw.begin(w, h, g_camera, cr, cg, cb);
-	g_draw.drawScene(g_scene);
+	if (in3d) {
+		g_draw.drawScene(g_scene);
+	}
 	sg_end_pass();
 
-	// ImGui overlay
 	{
 		sg_pass pass = {};
 		pass.action.colors[0].load_action = SG_LOADACTION_LOAD;
@@ -92,6 +230,10 @@ void frame()
 		sg_end_pass();
 	}
 	sg_commit();
+
+	if (g_ui.settingsDirty && g_ui.screen == toy::AppScreen::Menu) {
+		saveSettingsIfDirty();
+	}
 }
 
 void event(const sapp_event* e)
@@ -129,42 +271,45 @@ void event(const sapp_event* e)
 		g_camera.zoom(e->scroll_y * 0.15f);
 		break;
 	case SAPP_EVENTTYPE_KEY_DOWN:
-		if (e->key_code == SAPP_KEYCODE_R) {
-			if (g_session.mode() == toy::AppMode::Offline) {
-				toy::MatchConfig cfg = g_match.config;
-				cfg.seed = g_match.rng + 3u;
-				g_session.startOffline(g_match, cfg);
-				rebuildScene();
-				g_ui.selectedHand = 0;
-			} else if (g_session.mode() == toy::AppMode::Host) {
+		if (e->key_code == SAPP_KEYCODE_ESCAPE) {
+			if (g_ui.screen == toy::AppScreen::Match) {
+				g_ui.pauseOpen = !g_ui.pauseOpen;
+			} else if (g_ui.screen == toy::AppScreen::Settings || g_ui.showHowToPlay) {
+				g_ui.showHowToPlay = false;
+				g_ui.screen = toy::AppScreen::Menu;
+			}
+		} else if (e->key_code == SAPP_KEYCODE_R) {
+			if (g_ui.screen == toy::AppScreen::Match && g_session.mode() == toy::AppMode::Offline) {
+				startOfflineMatch();
+			} else if (g_ui.screen == toy::AppScreen::Match && g_session.mode() == toy::AppMode::Host) {
 				g_session.hostRematch(g_match);
-				if (g_session.sceneNeedsRebuild()) {
-					rebuildScene();
-				}
 			}
 		} else if (e->key_code == SAPP_KEYCODE_SPACE) {
-			if (g_session.mode() == toy::AppMode::Offline && g_match.phase == toy::Phase::Playing) {
+			if (g_ui.screen == toy::AppScreen::Match && g_session.mode() == toy::AppMode::Offline &&
+				g_match.phase == toy::Phase::Playing) {
 				toy::autoPlayBest(g_match);
 				toy::bumpSync(g_match);
 			}
-		} else if (e->key_code == SAPP_KEYCODE_N && g_session.mode() == toy::AppMode::Offline) {
-			toy::MatchConfig cfg = g_match.config;
-			cfg.seed = g_match.rng + 7u;
-			g_session.startOffline(g_match, cfg);
-			rebuildScene();
 		} else if (e->key_code == SAPP_KEYCODE_H) {
 			g_ui.showHowToPlay = !g_ui.showHowToPlay;
 		} else if (e->key_code == SAPP_KEYCODE_ENTER || e->key_code == SAPP_KEYCODE_KP_ENTER) {
-			if (g_match.phase == toy::Phase::Playing) {
-				g_session.requestPlayCard(g_match, g_ui.selectedHand, g_ui.selectedTarget);
+			if (g_ui.screen == toy::AppScreen::Match && g_match.phase == toy::Phase::Playing) {
+				if (!g_session.requestPlayCard(g_match, g_ui.selectedHand, g_ui.selectedTarget)) {
+					const char* err = g_session.lastError();
+					if (err && err[0]) {
+						toy::uiPushToast(g_ui, err, 2.8f);
+					}
+				}
 			}
 		} else if (e->key_code >= SAPP_KEYCODE_1 && e->key_code <= SAPP_KEYCODE_5) {
+			if (g_ui.screen != toy::AppScreen::Match) {
+				break;
+			}
 			const int idx = static_cast<int>(e->key_code - SAPP_KEYCODE_1);
 			const int handSeat =
 				(g_session.mode() == toy::AppMode::Offline) ? g_match.activePlayer : g_session.localSeat();
 			if (handSeat >= 0 && handSeat < g_match.config.playerCount) {
-				const int handN =
-					static_cast<int>(g_match.players[static_cast<size_t>(handSeat)].hand.size());
+				const int handN = static_cast<int>(g_match.players[static_cast<size_t>(handSeat)].hand.size());
 				if (idx < handN) {
 					g_ui.selectedHand = idx;
 				}
@@ -178,9 +323,9 @@ void event(const sapp_event* e)
 
 void cleanup()
 {
+	saveSettingsIfDirty();
 	g_session.shutdown(&g_match);
-	g_draw.shutdown();
-	g_scene.destroy();
+	destroyScene();
 	toy::uiShutdown();
 	sg_shutdown();
 }
@@ -197,7 +342,7 @@ sapp_desc sokol_main(int /*argc*/, char* /*argv*/[])
 	d.width = 1440;
 	d.height = 900;
 	d.sample_count = 4;
-	d.window_title = "Oyuncak Asker Masa Savasi — M5 Polish (Box3D)";
+	d.window_title = "Oyuncak Asker Masa Savasi — v0.6 Solid Core";
 	d.logger.func = slog_func;
 	d.high_dpi = true;
 	return d;

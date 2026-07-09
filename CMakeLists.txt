@@ -109,6 +109,10 @@ add_library(toy_game STATIC
 	src/game/cosmetics.h
 	src/game/summary.cpp
 	src/game/summary.h
+	src/game/play_reason.cpp
+	src/game/play_reason.h
+	src/app/settings.cpp
+	src/app/settings.h
 	src/physics/table_scene.cpp
 	src/physics/table_scene.h
 	src/net/socket.cpp

@@ -58,7 +58,12 @@ public:
 	bool canLocalAct(const Match& match) const;
 	bool isLocalSeat(int seat) const { return seat == localSeat_; }
 
+	// Last human-readable failure from request* (v0.6).
+	const char* lastError() const { return lastError_.c_str(); }
+	void clearError() { lastError_.clear(); }
+
 private:
+	void setError(const char* msg);
 	struct ClientSlot {
 		net::TcpSocket sock;
 		net::FrameCodec codec;
@@ -96,6 +101,7 @@ private:
 	net::FrameCodec clientCodec_;
 	net::SendQueue clientSendQ_;
 	bool clientWelcomed_ = false;
+	std::string lastError_;
 };
 
 } // namespace toy

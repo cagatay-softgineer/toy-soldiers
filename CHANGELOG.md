@@ -5,7 +5,20 @@ All notable changes to **Oyuncak Asker Masa Savaşı (toy-soldiers)** are docume
 ## [Unreleased]
 
 ### Planned
-- See [docs/ROADMAP_to_v1.md](docs/ROADMAP_to_v1.md) (v0.6 → v1.0, 200 features)
+- Remaining v0.6 P1/P2 items (fullscreen, crash handler, etc.)
+- See [docs/ROADMAP_to_v1.md](docs/ROADMAP_to_v1.md)
+
+## [0.6.0-dev] — 2026-07-09
+
+### Added — v0.6 Solid Core (P0 slice)
+- App screens: **Menu → Lobby → Match → Results** (+ Settings / How to Play)
+- Settings persistence (`%APPDATA%/toy-soldiers/settings.ini`)
+- Illegal-play reasons as toasts ("Not your turn", "Sandstorm: adjacent only", …)
+- Turn-change banner (~0.85s)
+- Auto-select first legal target each turn
+- Protocol version shown in lobby/match UI
+- `scripts/verify.ps1` one-command test gate
+- Pause overlay (Esc) with leave-to-menu
 
 ## [0.5.0] — 2026-07-09
 

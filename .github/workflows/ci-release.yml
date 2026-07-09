@@ -1,0 +1,127 @@
+# Continuous CI + GitHub Release on every push to main.
+# Tag: v0.0.0-dev.<run_number>+<short_sha>
+# Pre-release by default (dev channel until v1.0).
+
+name: CI & Continuous Release
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ci-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build & test (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout toy-soldiers
+        uses: actions/checkout@v4
+
+      - name: Checkout Box3D (sibling dependency)
+        uses: actions/checkout@v4
+        with:
+          repository: erincatto/box3d
+          path: box3d-src
+
+      - name: Setup CMake
+        uses: lukka/get-cmake@latest
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          $box = Join-Path $env:GITHUB_WORKSPACE "box3d-src"
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DTOY_BOX3D_DIR="$box"
+
+      - name: Build Release
+        run: cmake --build build --config Release --parallel
+
+      - name: Run headless tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $bin = "build/bin/Release"
+          & "$bin/toy_sim.exe"
+          & "$bin/toy_event_test.exe"
+          & "$bin/toy_cosmetic_test.exe"
+          & "$bin/toy_balance_report.exe"
+          # Loopback net test (host+client same machine)
+          & "$bin/toy_net_test.exe"
+
+      - name: Upload Windows artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: toy-soldiers-windows-Release
+          path: |
+            build/bin/Release/*.exe
+            README.md
+            docs/**
+            LICENSE*
+          if-no-files-found: warn
+
+  continuous-release:
+    name: Publish continuous release
+    needs: test
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: toy-soldiers-windows-Release
+          path: dist
+
+      - name: Package zip
+        run: |
+          mkdir -p release-pkg
+          cp -r dist/* release-pkg/ || true
+          cd release-pkg
+          zip -r ../toy-soldiers-windows.zip . || (cd .. && tar -a -c -f toy-soldiers-windows.zip -C release-pkg .)
+
+      - name: Create continuous GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          SHORT_SHA="${GITHUB_SHA::7}"
+          RUN="${GITHUB_RUN_NUMBER}"
+          TAG="v0.0.0-dev.${RUN}+${SHORT_SHA}"
+          TITLE="Continuous ${TAG}"
+          NOTES="$(cat <<EOF
+          ## Continuous release (auto)
+
+          - **Commit:** ${GITHUB_SHA}
+          - **Branch:** ${GITHUB_REF_NAME}
+          - **Run:** [#${RUN}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})
+          - **Channel:** pre-release / dev (not a stable version tag)
+
+          Built on \`windows-latest\` after headless tests.
+          See [ROADMAP_to_v1.md](docs/ROADMAP_to_v1.md) for product milestones toward v1.0.
+          EOF
+          )"
+
+          # Delete previous continuous tag if re-running same tag (unlikely with run number)
+          gh release delete "$TAG" -y 2>/dev/null || true
+          git push origin ":refs/tags/$TAG" 2>/dev/null || true
+
+          gh release create "$TAG" \
+            --title "$TITLE" \
+            --notes "$NOTES" \
+            --prerelease \
+            --target "$GITHUB_SHA" \
+            toy-soldiers-windows.zip

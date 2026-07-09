@@ -47,6 +47,31 @@ bool parseBool(const char* v, bool def)
 	return def;
 }
 
+void clampSettings(Settings& out)
+{
+	if (out.joinPort < 1024 || out.joinPort > 65535) {
+		out.joinPort = kDefaultPort;
+	}
+	if (out.hostPort < 1024 || out.hostPort > 65535) {
+		out.hostPort = kDefaultPort;
+	}
+	if (out.uiScalePercent != 100 && out.uiScalePercent != 125 && out.uiScalePercent != 150) {
+		out.uiScalePercent = 100;
+	}
+	if (out.windowWidth < 800) {
+		out.windowWidth = 800;
+	}
+	if (out.windowHeight < 600) {
+		out.windowHeight = 600;
+	}
+	if (out.language != 0 && out.language != 1) {
+		out.language = 0;
+	}
+	if (out.lastMode < 0 || out.lastMode > 3) {
+		out.lastMode = 0;
+	}
+}
+
 } // namespace
 
 const char* settingsPath()
@@ -74,6 +99,11 @@ const char* settingsPath()
 	}
 #endif
 	return pathBuf().c_str();
+}
+
+void settingsReset(Settings& out)
+{
+	out = Settings{};
 }
 
 bool settingsLoad(Settings& out)
@@ -123,41 +153,62 @@ bool settingsLoad(Settings& out)
 			out.accessoryIndex = std::atoi(val);
 		} else if (std::strcmp(key, "uiScalePercent") == 0) {
 			out.uiScalePercent = std::atoi(val);
+		} else if (std::strcmp(key, "fullscreen") == 0) {
+			out.fullscreen = parseBool(val, false);
+		} else if (std::strcmp(key, "vsync") == 0) {
+			out.vsync = parseBool(val, true);
+		} else if (std::strcmp(key, "windowWidth") == 0) {
+			out.windowWidth = std::atoi(val);
+		} else if (std::strcmp(key, "windowHeight") == 0) {
+			out.windowHeight = std::atoi(val);
+		} else if (std::strcmp(key, "showFps") == 0) {
+			out.showFps = parseBool(val, false);
+		} else if (std::strcmp(key, "showSyncGen") == 0) {
+			out.showSyncGen = parseBool(val, false);
+		} else if (std::strcmp(key, "highContrast") == 0) {
+			out.highContrast = parseBool(val, false);
+		} else if (std::strcmp(key, "language") == 0) {
+			out.language = std::atoi(val);
+		} else if (std::strcmp(key, "lastMode") == 0) {
+			out.lastMode = std::atoi(val);
 		}
 	}
 	std::fclose(f);
-	if (out.joinPort < 1024 || out.joinPort > 65535) {
-		out.joinPort = kDefaultPort;
-	}
-	if (out.hostPort < 1024 || out.hostPort > 65535) {
-		out.hostPort = kDefaultPort;
-	}
-	if (out.uiScalePercent != 100 && out.uiScalePercent != 125 && out.uiScalePercent != 150) {
-		out.uiScalePercent = 100;
-	}
+	clampSettings(out);
 	return true;
 }
 
 bool settingsSave(const Settings& s)
 {
+	Settings tmp = s;
+	clampSettings(tmp);
 	FILE* f = std::fopen(settingsPath(), "wb");
 	if (!f) {
 		return false;
 	}
-	std::fprintf(f, "playerName=%s\n", s.playerName);
-	std::fprintf(f, "joinHost=%s\n", s.joinHost);
-	std::fprintf(f, "joinPort=%d\n", s.joinPort);
-	std::fprintf(f, "hostPort=%d\n", s.hostPort);
-	std::fprintf(f, "mapIndex=%d\n", s.mapIndex);
-	std::fprintf(f, "eventsEnabled=%d\n", s.eventsEnabled ? 1 : 0);
-	std::fprintf(f, "fillAI=%d\n", s.fillAI ? 1 : 0);
-	std::fprintf(f, "autoOrbit=%d\n", s.autoOrbit ? 1 : 0);
-	std::fprintf(f, "showHowToPlay=%d\n", s.showHowToPlay ? 1 : 0);
-	std::fprintf(f, "masterVolume=%.3f\n", static_cast<double>(s.masterVolume));
-	std::fprintf(f, "plasticIndex=%d\n", s.plasticIndex);
-	std::fprintf(f, "towerSkinIndex=%d\n", s.towerSkinIndex);
-	std::fprintf(f, "accessoryIndex=%d\n", s.accessoryIndex);
-	std::fprintf(f, "uiScalePercent=%d\n", s.uiScalePercent);
+	std::fprintf(f, "playerName=%s\n", tmp.playerName);
+	std::fprintf(f, "joinHost=%s\n", tmp.joinHost);
+	std::fprintf(f, "joinPort=%d\n", tmp.joinPort);
+	std::fprintf(f, "hostPort=%d\n", tmp.hostPort);
+	std::fprintf(f, "mapIndex=%d\n", tmp.mapIndex);
+	std::fprintf(f, "eventsEnabled=%d\n", tmp.eventsEnabled ? 1 : 0);
+	std::fprintf(f, "fillAI=%d\n", tmp.fillAI ? 1 : 0);
+	std::fprintf(f, "autoOrbit=%d\n", tmp.autoOrbit ? 1 : 0);
+	std::fprintf(f, "showHowToPlay=%d\n", tmp.showHowToPlay ? 1 : 0);
+	std::fprintf(f, "masterVolume=%.3f\n", static_cast<double>(tmp.masterVolume));
+	std::fprintf(f, "plasticIndex=%d\n", tmp.plasticIndex);
+	std::fprintf(f, "towerSkinIndex=%d\n", tmp.towerSkinIndex);
+	std::fprintf(f, "accessoryIndex=%d\n", tmp.accessoryIndex);
+	std::fprintf(f, "uiScalePercent=%d\n", tmp.uiScalePercent);
+	std::fprintf(f, "fullscreen=%d\n", tmp.fullscreen ? 1 : 0);
+	std::fprintf(f, "vsync=%d\n", tmp.vsync ? 1 : 0);
+	std::fprintf(f, "windowWidth=%d\n", tmp.windowWidth);
+	std::fprintf(f, "windowHeight=%d\n", tmp.windowHeight);
+	std::fprintf(f, "showFps=%d\n", tmp.showFps ? 1 : 0);
+	std::fprintf(f, "showSyncGen=%d\n", tmp.showSyncGen ? 1 : 0);
+	std::fprintf(f, "highContrast=%d\n", tmp.highContrast ? 1 : 0);
+	std::fprintf(f, "language=%d\n", tmp.language);
+	std::fprintf(f, "lastMode=%d\n", tmp.lastMode);
 	std::fclose(f);
 	return true;
 }

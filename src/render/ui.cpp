@@ -1,5 +1,6 @@
 #include "render/ui.h"
 
+#include "app/i18n.h"
 #include "game/cards.h"
 #include "game/cosmetics.h"
 #include "game/events.h"
@@ -83,6 +84,16 @@ void uiApplySettings(UiState& ui, const Settings& s)
 	ui.towerSkinIndex = s.towerSkinIndex;
 	ui.accessoryIndex = s.accessoryIndex;
 	ui.uiScalePercent = s.uiScalePercent;
+	ui.fullscreen = s.fullscreen;
+	ui.vsync = s.vsync;
+	ui.windowWidth = s.windowWidth;
+	ui.windowHeight = s.windowHeight;
+	ui.showFps = s.showFps;
+	ui.showSyncGen = s.showSyncGen;
+	ui.highContrast = s.highContrast;
+	ui.language = s.language;
+	ui.lastMode = s.lastMode;
+	i18nSetLang(s.language == 1 ? Lang::Tr : Lang::En);
 }
 
 void uiCaptureSettings(const UiState& ui, Settings& s)
@@ -101,6 +112,15 @@ void uiCaptureSettings(const UiState& ui, Settings& s)
 	s.towerSkinIndex = ui.towerSkinIndex;
 	s.accessoryIndex = ui.accessoryIndex;
 	s.uiScalePercent = ui.uiScalePercent;
+	s.fullscreen = ui.fullscreen;
+	s.vsync = ui.vsync;
+	s.windowWidth = ui.windowWidth;
+	s.windowHeight = ui.windowHeight;
+	s.showFps = ui.showFps;
+	s.showSyncGen = ui.showSyncGen;
+	s.highContrast = ui.highContrast;
+	s.language = ui.language;
+	s.lastMode = ui.lastMode;
 }
 
 void uiPushToast(UiState& ui, const char* text, float seconds)
@@ -139,6 +159,48 @@ const char* modeName(AppMode m)
 void applyUiScale(const UiState& ui)
 {
 	ImGui::GetIO().FontGlobalScale = static_cast<float>(ui.uiScalePercent) / 100.0f;
+}
+
+void applyTheme(const UiState& ui)
+{
+	if (ui.highContrast) {
+		ImGui::StyleColorsLight();
+		ImGuiStyle& st = ImGui::GetStyle();
+		st.Colors[ImGuiCol_WindowBg] = ImVec4(1.0f, 1.0f, 1.0f, 0.98f);
+		st.Colors[ImGuiCol_Text] = ImVec4(0.0f, 0.0f, 0.0f, 1.0f);
+		st.Colors[ImGuiCol_Button] = ImVec4(0.95f, 0.85f, 0.15f, 1.0f);
+		st.Colors[ImGuiCol_ButtonHovered] = ImVec4(1.0f, 0.92f, 0.25f, 1.0f);
+		st.Colors[ImGuiCol_ButtonActive] = ImVec4(0.8f, 0.7f, 0.05f, 1.0f);
+		st.Colors[ImGuiCol_Header] = ImVec4(0.2f, 0.45f, 0.95f, 1.0f);
+		st.Colors[ImGuiCol_FrameBg] = ImVec4(0.9f, 0.9f, 0.9f, 1.0f);
+	} else {
+		ImGui::StyleColorsDark();
+	}
+}
+
+// Card keywords for tooltips (v0.6 P1 #10)
+void appendCardKeywords(const CardDef& def, char* out, int cap)
+{
+	out[0] = 0;
+	char tmp[128];
+	std::snprintf(tmp, sizeof(tmp), "[%s]", trKeyword(cardClassName(def.klass)));
+	std::strncat(out, tmp, static_cast<size_t>(cap - 1));
+	if (def.klass == CardClass::Defense) {
+		std::strncat(out, " · ", static_cast<size_t>(cap - std::strlen(out) - 1));
+		std::strncat(out, trKeyword("Shield"), static_cast<size_t>(cap - std::strlen(out) - 1));
+	}
+	if (def.klass == CardClass::Attack && !def.freeTarget) {
+		std::strncat(out, " · ", static_cast<size_t>(cap - std::strlen(out) - 1));
+		std::strncat(out, trKeyword("AdjacentOnly"), static_cast<size_t>(cap - std::strlen(out) - 1));
+	}
+	if (def.id == 20 || def.id == 21 || def.id == 22 || def.id == 23 || def.id == 12) {
+		std::strncat(out, " · ", static_cast<size_t>(cap - std::strlen(out) - 1));
+		std::strncat(out, trKeyword("Draw"), static_cast<size_t>(cap - std::strlen(out) - 1));
+	}
+	if (def.id == 21 || def.id == 25) {
+		std::strncat(out, " · ", static_cast<size_t>(cap - std::strlen(out) - 1));
+		std::strncat(out, trKeyword("Heal"), static_cast<size_t>(cap - std::strlen(out) - 1));
+	}
 }
 
 void drawToastsAndBanners(Match& match, UiState& ui)
@@ -203,15 +265,21 @@ void drawHowToPlaySteps(UiState& ui)
 	const ImGuiViewport* vp = ImGui::GetMainViewport();
 	ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.5f),
 							ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-	ImGui::SetNextWindowSize(ImVec2(480, 0), ImGuiCond_Always);
-	ImGui::Begin("How to play — 5 steps", &ui.showHowToPlay, ImGuiWindowFlags_AlwaysAutoResize);
-	ImGui::TextColored(ImVec4(0.96f, 0.77f, 0.36f, 1.0f), "Oyuncak Asker Masa Savasi");
+	ImGui::SetNextWindowSize(ImVec2(520, 0), ImGuiCond_Always);
+	ImGui::Begin(tr("menu.howto"), &ui.showHowToPlay, ImGuiWindowFlags_AlwaysAutoResize);
+	ImGui::TextColored(ImVec4(0.96f, 0.77f, 0.36f, 1.0f), "%s", tr("app.title"));
 	ImGui::Separator();
 	ImGui::TextWrapped("1. Fantasy — Plastic toy soldiers on a table. Cards are orders.");
 	ImGui::TextWrapped("2. Goal — Destroy enemy main towers. Last tower standing wins.");
 	ImGui::TextWrapped("3. Turn — Pick a target, pick one card, Play. Then turn passes.");
 	ImGui::TextWrapped("4. Shield / Scout — Shield halves damage. Scout +1 lasts until your next attack.");
 	ImGui::TextWrapped("5. World — Maps add props & events (sandstorm, rain, flood, cat). Cosmetics are fashion only.");
+	ImGui::Separator();
+	ImGui::TextUnformatted(tr("glossary.title"));
+	ImGui::BulletText("%s", tr("glossary.shield"));
+	ImGui::BulletText("%s", tr("glossary.adjacent"));
+	ImGui::BulletText("%s", tr("glossary.world_event"));
+	ImGui::BulletText("%s", tr("glossary.host"));
 	ImGui::Separator();
 	ImGui::BulletText("LMB orbit · Scroll zoom · 1-5 hand · Enter play · H help · Esc pause");
 	ImGui::BulletText("Protocol v%u · Default port %u", static_cast<unsigned>(kProtocolVersion),
@@ -356,27 +424,43 @@ void drawMenuV2(UiState& ui)
 	ImGui::Begin("Oyuncak Asker Masa Savasi", nullptr,
 				 ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize);
 
-	ImGui::TextColored(ImVec4(0.96f, 0.77f, 0.36f, 1.0f), "Toy Soldiers Tabletop");
+	ImGui::TextColored(ImVec4(0.96f, 0.77f, 0.36f, 1.0f), "%s", tr("app.title"));
 	ImGui::TextDisabled("v0.6 Solid Core  ·  protocol %u", static_cast<unsigned>(kProtocolVersion));
 	ImGui::Separator();
 
-	ImGui::InputText("Display name", ui.playerName, sizeof(ui.playerName));
+	ImGui::InputText(tr("menu.display_name"), ui.playerName, sizeof(ui.playerName));
 
-	if (ImGui::Button("Play Offline (Hotseat)", ImVec2(-1, 42))) {
-		ui.selectedHand = -2; // intent: offline
+	if (ui.lastMode >= 1 && ui.lastMode <= 3) {
+		if (ImGui::Button(tr("menu.continue"), ImVec2(-1, 40))) {
+			if (ui.lastMode == static_cast<int>(LastMode::Offline)) {
+				ui.selectedHand = -2;
+			} else if (ui.lastMode == static_cast<int>(LastMode::Host)) {
+				ui.selectedHand = -3;
+			} else {
+				ui.selectedHand = -4;
+			}
+			ui.settingsDirty = true;
+		}
+	}
+
+	if (ImGui::Button(tr("menu.play_offline"), ImVec2(-1, 42))) {
+		ui.selectedHand = -2;
+		ui.lastMode = static_cast<int>(LastMode::Offline);
 		ui.settingsDirty = true;
 	}
-	if (ImGui::Button("Host Lobby", ImVec2(-1, 42))) {
-		ui.selectedHand = -3; // intent: host
+	if (ImGui::Button(tr("menu.host"), ImVec2(-1, 42))) {
+		ui.selectedHand = -3;
+		ui.lastMode = static_cast<int>(LastMode::Host);
 		ui.settingsDirty = true;
 	}
 
 	ImGui::Separator();
-	ImGui::InputText("Join IP", ui.joinHost, sizeof(ui.joinHost));
+	ImGui::InputText(tr("menu.join_ip"), ui.joinHost, sizeof(ui.joinHost));
 	ImGui::SetNextItemWidth(120);
 	ImGui::InputInt("Port##join", &ui.joinPort);
-	if (ImGui::Button("Join Host", ImVec2(-1, 36))) {
-		ui.selectedHand = -4; // intent: join
+	if (ImGui::Button(tr("menu.join"), ImVec2(-1, 36))) {
+		ui.selectedHand = -4;
+		ui.lastMode = static_cast<int>(LastMode::Join);
 		ui.settingsDirty = true;
 	}
 
@@ -386,13 +470,13 @@ void drawMenuV2(UiState& ui)
 	ImGui::Checkbox("Fill empty seats with AI", &ui.fillAI);
 
 	ImGui::Separator();
-	if (ImGui::Button("Settings", ImVec2(-1, 32))) {
+	if (ImGui::Button(tr("menu.settings"), ImVec2(-1, 32))) {
 		ui.screen = AppScreen::Settings;
 	}
-	if (ImGui::Button("How to Play", ImVec2(-1, 32))) {
+	if (ImGui::Button(tr("menu.howto"), ImVec2(-1, 32))) {
 		ui.showHowToPlay = true;
 	}
-	if (ImGui::Button("Quit", ImVec2(-1, 32))) {
+	if (ImGui::Button(tr("menu.quit"), ImVec2(-1, 32))) {
 		sapp_request_quit();
 	}
 	ImGui::End();
@@ -401,17 +485,30 @@ void drawMenuV2(UiState& ui)
 void drawSettings(UiState& ui)
 {
 	const ImGuiViewport* vp = ImGui::GetMainViewport();
-	ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.45f),
+	ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.42f),
 							ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-	ImGui::SetNextWindowSize(ImVec2(420, 0), ImGuiCond_Always);
-	ImGui::Begin("Settings", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse);
+	ImGui::SetNextWindowSize(ImVec2(460, 0), ImGuiCond_Always);
+	ImGui::Begin(tr("settings.title"), nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse);
 
-	ImGui::InputText("Display name", ui.playerName, sizeof(ui.playerName));
-	ImGui::InputText("Default join IP", ui.joinHost, sizeof(ui.joinHost));
+	ImGui::InputText(tr("menu.display_name"), ui.playerName, sizeof(ui.playerName));
+	ImGui::InputText(tr("menu.join_ip"), ui.joinHost, sizeof(ui.joinHost));
 	ImGui::InputInt("Join port", &ui.joinPort);
 	ImGui::InputInt("Host port", &ui.hostPort);
-	ImGui::Checkbox("Auto-orbit camera", &ui.autoOrbit);
+	ImGui::Checkbox(tr("settings.auto_orbit"), &ui.autoOrbit);
 	ImGui::SliderFloat("Master volume (placeholder)", &ui.masterVolume, 0.0f, 1.0f);
+
+	ImGui::Separator();
+	ImGui::TextUnformatted(tr("settings.language"));
+	if (ImGui::RadioButton("English", ui.language == 0)) {
+		ui.language = 0;
+		i18nSetLang(Lang::En);
+	}
+	ImGui::SameLine();
+	if (ImGui::RadioButton("Turkce", ui.language == 1)) {
+		ui.language = 1;
+		i18nSetLang(Lang::Tr);
+	}
+
 	ImGui::TextUnformatted("UI scale");
 	if (ImGui::RadioButton("100%", ui.uiScalePercent == 100)) {
 		ui.uiScalePercent = 100;
@@ -424,15 +521,36 @@ void drawSettings(UiState& ui)
 	if (ImGui::RadioButton("150%", ui.uiScalePercent == 150)) {
 		ui.uiScalePercent = 150;
 	}
+	ImGui::Checkbox(tr("settings.high_contrast"), &ui.highContrast);
+
+	ImGui::Separator();
+	ImGui::Checkbox(tr("settings.fullscreen"), &ui.fullscreen);
+	ImGui::Checkbox(tr("settings.vsync"), &ui.vsync);
+	ImGui::InputInt("Window width", &ui.windowWidth);
+	ImGui::InputInt("Window height", &ui.windowHeight);
+	ImGui::TextDisabled("Resolution applies on next launch (or toggle fullscreen now).");
+
+	ImGui::Separator();
+	ImGui::Checkbox(tr("settings.show_fps"), &ui.showFps);
+	ImGui::Checkbox(tr("settings.show_sync"), &ui.showSyncGen);
 	ImGui::Checkbox("Show how-to on first run", &ui.showHowToPlay);
 	ImGui::TextDisabled("Settings file: %s", settingsPath());
 
-	if (ImGui::Button("Save", ImVec2(120, 32))) {
+	if (ImGui::Button(tr("settings.save"), ImVec2(120, 32))) {
 		ui.settingsDirty = true;
+		ui.wantApplyDisplay = true;
 		ui.screen = AppScreen::Menu;
 	}
 	ImGui::SameLine();
-	if (ImGui::Button("Back", ImVec2(120, 32))) {
+	if (ImGui::Button(tr("settings.reset"), ImVec2(160, 32))) {
+		Settings def;
+		settingsReset(def);
+		// keep path; re-apply defaults to UI
+		uiApplySettings(ui, def);
+		ui.settingsDirty = true;
+	}
+	ImGui::SameLine();
+	if (ImGui::Button(tr("settings.back"), ImVec2(100, 32))) {
 		ui.screen = AppScreen::Menu;
 	}
 	ImGui::End();
@@ -586,15 +704,20 @@ void drawMatchHud(Match& match, NetSession& session, UiState& ui)
 		const Player& p = match.players[static_cast<size_t>(i)];
 		const bool active = (i == match.activePlayer && match.phase == Phase::Playing);
 		const bool mine = (session.mode() != AppMode::Offline && i == session.localSeat());
+		// Seat text colors: blue/orange/purple/cyan (not red-green only) — a11y #35
+		const ImVec4 seatCols[4] = {
+			ImVec4(0.35f, 0.75f, 1.0f, 1.0f), // blue
+			ImVec4(1.0f, 0.65f, 0.2f, 1.0f),  // orange
+			ImVec4(0.75f, 0.5f, 1.0f, 1.0f),  // purple
+			ImVec4(0.3f, 0.95f, 0.85f, 1.0f), // cyan
+		};
 		if (active) {
 			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.96f, 0.77f, 0.36f, 1.0f));
-		} else if (mine) {
-			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.55f, 0.85f, 1.0f, 1.0f));
+		} else {
+			ImGui::PushStyleColor(ImGuiCol_Text, seatCols[i % 4]);
 		}
 		ImGui::Text("%s%s%s", p.name, p.eliminated ? " [OUT]" : "", mine ? " (you)" : "");
-		if (active || mine) {
-			ImGui::PopStyleColor();
-		}
+		ImGui::PopStyleColor();
 		ImGui::ProgressBar(p.towerMaxHp > 0 ? static_cast<float>(p.towerHp) / static_cast<float>(p.towerMaxHp) : 0.f,
 						   ImVec2(-1, 0), nullptr);
 		ImGui::SameLine(0, 8);
@@ -672,7 +795,14 @@ void drawMatchHud(Match& match, NetSession& session, UiState& ui)
 					ui.selectedHand = h;
 				}
 				if (ImGui::IsItemHovered()) {
-					ImGui::SetTooltip("%s", def->description);
+					char kw[96];
+					appendCardKeywords(*def, kw, sizeof(kw));
+					ImGui::BeginTooltip();
+					ImGui::TextUnformatted(def->name);
+					ImGui::TextColored(ImVec4(0.7f, 0.85f, 1.0f, 1.0f), "%s", kw);
+					ImGui::Separator();
+					ImGui::TextWrapped("%s", def->description);
+					ImGui::EndTooltip();
 				}
 				if (selected) {
 					ImGui::PopStyleColor();
@@ -732,23 +862,66 @@ void drawMatchHud(Match& match, NetSession& session, UiState& ui)
 		ui.screen = AppScreen::Results;
 	}
 
+	// FPS / sync debug
+	if (ui.showFps || ui.showSyncGen) {
+		ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x - 160, vp->WorkPos.y + vp->WorkSize.y - 60),
+								ImGuiCond_Always);
+		ImGui::SetNextWindowBgAlpha(0.5f);
+		if (ImGui::Begin("##dbg", nullptr,
+						 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+							 ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoInputs)) {
+			if (ui.showFps) {
+				ImGui::Text("FPS %.0f", ImGui::GetIO().Framerate);
+			}
+			if (ui.showSyncGen) {
+				ImGui::Text("sync %u", match.syncGeneration);
+			}
+		}
+		ImGui::End();
+	}
+
+	// Soft-fail: surface session lastError as toast once
+	if (session.lastError()[0]) {
+		uiPushToast(ui, session.lastError(), 2.8f);
+		session.clearError();
+	}
+
 	// Pause
 	if (ui.pauseOpen) {
 		ImGui::OpenPopup("Paused");
 	}
 	if (ImGui::BeginPopupModal("Paused", &ui.pauseOpen, ImGuiWindowFlags_AlwaysAutoResize)) {
-		ImGui::TextUnformatted("Paused");
-		if (ImGui::Button("Resume", ImVec2(200, 32))) {
+		ImGui::TextUnformatted(tr("pause.title"));
+		ImGui::Separator();
+		ImGui::BulletText("%s", tr("glossary.shield"));
+		ImGui::BulletText("%s", tr("glossary.adjacent"));
+		if (ImGui::Button(tr("pause.resume"), ImVec2(240, 32))) {
 			ui.pauseOpen = false;
 			ImGui::CloseCurrentPopup();
 		}
-		if (ImGui::Button("How to Play", ImVec2(200, 32))) {
+		if (ImGui::Button(tr("menu.howto"), ImVec2(240, 32))) {
 			ui.showHowToPlay = true;
 		}
-		if (ImGui::Button("Leave to Menu", ImVec2(200, 32))) {
+		if (ImGui::Button(tr("pause.resign"), ImVec2(240, 32))) {
+			ui.leaveConfirmOpen = true;
+		}
+		ImGui::EndPopup();
+	}
+	if (ui.leaveConfirmOpen) {
+		ImGui::OpenPopup("LeaveConfirm");
+	}
+	if (ImGui::BeginPopupModal("LeaveConfirm", &ui.leaveConfirmOpen, ImGuiWindowFlags_AlwaysAutoResize)) {
+		ImGui::TextWrapped("%s", tr("pause.confirm"));
+		if (ImGui::Button(tr("pause.yes"), ImVec2(120, 32))) {
+			ui.leaveConfirmOpen = false;
 			ui.pauseOpen = false;
 			ui.selectedHand = -6;
 			ui.screen = AppScreen::Menu;
+			ImGui::CloseCurrentPopup();
+		}
+		ImGui::SameLine();
+		if (ImGui::Button(tr("pause.no"), ImVec2(120, 32))) {
+			ui.leaveConfirmOpen = false;
 			ImGui::CloseCurrentPopup();
 		}
 		ImGui::EndPopup();
@@ -777,15 +950,21 @@ void drawResults(Match& match, NetSession& session, UiState& ui)
 					sum.damageTaken[static_cast<size_t>(i)], sum.cardsPlayed[static_cast<size_t>(i)]);
 	}
 	ImGui::Separator();
-	if (session.mode() == AppMode::Host && ImGui::Button("Rematch", ImVec2(-1, 36))) {
+	if (session.mode() == AppMode::Host && ImGui::Button(tr("results.rematch"), ImVec2(-1, 36))) {
 		session.hostRematch(match);
 		ui.screen = AppScreen::Match;
 	}
-	if (session.mode() == AppMode::Offline && ImGui::Button("New Hotseat", ImVec2(-1, 36))) {
-		ui.selectedHand = -2;
-		ui.screen = AppScreen::Menu;
+	if (session.mode() == AppMode::Offline) {
+		if (ImGui::Button(tr("results.play_again"), ImVec2(-1, 36))) {
+			ui.selectedHand = -2; // offline again, same settings/cosmetics
+		}
+		if (ImGui::Button(tr("results.change_loadout"), ImVec2(-1, 36))) {
+			ui.selectedHand = -6;
+			ui.screen = AppScreen::Menu;
+			// User adjusts cosmetics on menu then Play Offline
+		}
 	}
-	if (ImGui::Button("Main Menu", ImVec2(-1, 36))) {
+	if (ImGui::Button(tr("results.menu"), ImVec2(-1, 36))) {
 		ui.selectedHand = -6;
 		ui.screen = AppScreen::Menu;
 	}
@@ -796,7 +975,9 @@ void drawResults(Match& match, NetSession& session, UiState& ui)
 
 void uiDraw(Match& match, NetSession& session, UiState& ui)
 {
+	applyTheme(ui);
 	applyUiScale(ui);
+	i18nSetLang(ui.language == 1 ? Lang::Tr : Lang::En);
 	drawToastsAndBanners(match, ui);
 
 	if (ui.showHowToPlay) {

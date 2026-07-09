@@ -1,3 +1,5 @@
+#include "app/i18n.h"
+#include "app/session_log.h"
 #include "app/settings.h"
 #include "game/cosmetics.h"
 #include "game/match.h"
@@ -27,6 +29,7 @@ bool g_dragging = false;
 float g_lastMouseX = 0.0f;
 float g_lastMouseY = 0.0f;
 bool g_hasScene = false;
+bool g_fullscreen = false;
 
 void rebuildScene()
 {
@@ -62,17 +65,20 @@ void applyCosmeticsToSeat0()
 
 void goMenu()
 {
+	toy::sessionLog("INFO", "leave to menu");
 	g_session.shutdown(&g_match);
 	destroyScene();
 	g_match = toy::Match{};
 	g_ui.screen = toy::AppScreen::Menu;
 	g_ui.selectedHand = 0;
 	g_ui.pauseOpen = false;
+	g_ui.leaveConfirmOpen = false;
 	saveSettingsIfDirty();
 }
 
 void startOfflineMatch()
 {
+	toy::sessionLog("INFO", "start offline match");
 	toy::MatchConfig cfg = toy::uiMakeConfig(g_ui, 100u + g_match.syncGeneration);
 	g_session.startOffline(g_match, cfg);
 	for (int i = 1; i < g_match.config.playerCount; ++i) {
@@ -83,16 +89,19 @@ void startOfflineMatch()
 	g_ui.screen = toy::AppScreen::Match;
 	g_ui.selectedHand = 0;
 	g_ui.selectedTarget = 1;
+	g_ui.lastMode = static_cast<int>(toy::LastMode::Offline);
 	g_ui.settingsDirty = true;
 	saveSettingsIfDirty();
 }
 
 void startHostLobby()
 {
+	toy::sessionLog("INFO", "start host lobby");
 	toy::MatchConfig cfg = toy::uiMakeConfig(g_ui, 42u + g_match.syncGeneration);
 	std::snprintf(g_ui.hostName, sizeof(g_ui.hostName), "%s", g_ui.playerName);
 	if (!g_session.hostLobby(g_match, cfg, g_ui.hostName, static_cast<uint16_t>(g_ui.hostPort))) {
 		toy::uiPushToast(g_ui, g_session.status(), 3.0f);
+		toy::sessionLogf("ERROR", "host failed: %s", g_session.status());
 		g_ui.screen = toy::AppScreen::Menu;
 		return;
 	}
@@ -100,50 +109,62 @@ void startHostLobby()
 	rebuildScene();
 	g_ui.screen = toy::AppScreen::Lobby;
 	g_ui.selectedHand = 0;
+	g_ui.lastMode = static_cast<int>(toy::LastMode::Host);
 	g_ui.settingsDirty = true;
 	saveSettingsIfDirty();
 }
 
 void startJoin()
 {
+	toy::sessionLogf("INFO", "join %s:%d", g_ui.joinHost, g_ui.joinPort);
 	if (!g_session.joinLobby(g_match, g_ui.joinHost, static_cast<uint16_t>(g_ui.joinPort), g_ui.playerName)) {
 		toy::uiPushToast(g_ui, g_session.status(), 3.0f);
+		toy::sessionLogf("ERROR", "join failed: %s", g_session.status());
 		g_ui.screen = toy::AppScreen::Menu;
 		return;
 	}
 	g_ui.screen = toy::AppScreen::Lobby;
 	g_ui.selectedHand = 0;
+	g_ui.lastMode = static_cast<int>(toy::LastMode::Join);
 	g_ui.settingsDirty = true;
 	saveSettingsIfDirty();
 }
 
 void processUiIntents()
 {
-	// selectedHand negative codes from menu/lobby (see ui.cpp)
 	const int intent = g_ui.selectedHand;
 	if (intent >= 0) {
 		return;
 	}
 	g_ui.selectedHand = 0;
 	switch (intent) {
-	case -2: // offline
+	case -2:
 		startOfflineMatch();
 		break;
-	case -3: // host
+	case -3:
 		startHostLobby();
 		break;
-	case -4: // join
+	case -4:
 		startJoin();
 		break;
-	case -5: // start offline from empty lobby (unused if we start immediately)
+	case -5:
 		startOfflineMatch();
 		break;
-	case -6: // leave to menu
+	case -6:
 		goMenu();
 		break;
 	default:
 		break;
 	}
+}
+
+void applyFullscreenPref()
+{
+	const bool isFs = sapp_is_fullscreen();
+	if (g_ui.fullscreen != isFs) {
+		sapp_toggle_fullscreen();
+	}
+	g_fullscreen = g_ui.fullscreen;
 }
 
 void init()
@@ -153,15 +174,23 @@ void init()
 	desc.logger.func = slog_func;
 	sg_setup(&desc);
 
+	toy::sessionLogOpen();
+	toy::sessionLog("INFO", "app init");
+
 	toy::uiInit();
 	g_draw.init();
 
 	if (toy::settingsLoad(g_settings)) {
 		toy::uiApplySettings(g_ui, g_settings);
+		toy::sessionLogf("INFO", "settings loaded from %s", toy::settingsPath());
+	} else {
+		toy::sessionLog("INFO", "using default settings");
 	}
 	g_ui.screen = toy::AppScreen::Menu;
-	if (g_ui.showHowToPlay) {
-		// first run help
+	g_fullscreen = g_ui.fullscreen;
+	if (g_ui.fullscreen) {
+		// toggle after first frame is safer; queue for now
+		g_ui.wantApplyDisplay = true;
 	}
 }
 
@@ -172,14 +201,31 @@ void frame()
 	const double dt = sapp_frame_duration();
 
 	processUiIntents();
+
+	if (g_ui.wantApplyDisplay) {
+		g_ui.wantApplyDisplay = false;
+		applyFullscreenPref();
+		// Note: window size change requires restart on sokol; toast that.
+		if (g_ui.windowWidth != w || g_ui.windowHeight != h) {
+			toy::uiPushToast(g_ui, "Window size saved — restart app to apply resolution.", 3.0f);
+		}
+		g_ui.settingsDirty = true;
+		saveSettingsIfDirty();
+	}
+
 	g_session.update(g_match);
 
-	// Client: rebuild when snapshot says so
+	// Client soft-fail toast from rejects (also handled in UI)
+	if (g_session.lastError()[0] && g_ui.screen != toy::AppScreen::Match) {
+		toy::uiPushToast(g_ui, g_session.lastError(), 2.8f);
+		toy::sessionLogf("WARN", "%s", g_session.lastError());
+		g_session.clearError();
+	}
+
 	if (g_session.sceneNeedsRebuild()) {
 		rebuildScene();
 	}
 
-	// Auto screen transitions for multiplayer
 	if (g_ui.screen == toy::AppScreen::Lobby && g_match.phase == toy::Phase::Playing) {
 		g_ui.screen = toy::AppScreen::Match;
 		if (!g_hasScene) {
@@ -188,6 +234,7 @@ void frame()
 	}
 	if (g_ui.screen == toy::AppScreen::Match && g_match.phase == toy::Phase::GameOver) {
 		g_ui.screen = toy::AppScreen::Results;
+		toy::sessionLogf("INFO", "game over winner=%d turns=%d", g_match.winner, g_match.turnNumber);
 	}
 
 	const bool in3d = (g_ui.screen == toy::AppScreen::Lobby || g_ui.screen == toy::AppScreen::Match ||
@@ -207,7 +254,6 @@ void frame()
 	if (in3d) {
 		toy::mapClearColor(g_match.config.mapId, cr, cg, cb);
 	} else {
-		// Menu backdrop
 		cr = 0.06f;
 		cg = 0.07f;
 		cb = 0.12f;
@@ -231,7 +277,7 @@ void frame()
 	}
 	sg_commit();
 
-	if (g_ui.settingsDirty && g_ui.screen == toy::AppScreen::Menu) {
+	if (g_ui.settingsDirty && (g_ui.screen == toy::AppScreen::Menu || g_ui.screen == toy::AppScreen::Settings)) {
 		saveSettingsIfDirty();
 	}
 }
@@ -273,11 +319,19 @@ void event(const sapp_event* e)
 	case SAPP_EVENTTYPE_KEY_DOWN:
 		if (e->key_code == SAPP_KEYCODE_ESCAPE) {
 			if (g_ui.screen == toy::AppScreen::Match) {
-				g_ui.pauseOpen = !g_ui.pauseOpen;
+				if (g_ui.leaveConfirmOpen) {
+					g_ui.leaveConfirmOpen = false;
+				} else {
+					g_ui.pauseOpen = !g_ui.pauseOpen;
+				}
 			} else if (g_ui.screen == toy::AppScreen::Settings || g_ui.showHowToPlay) {
 				g_ui.showHowToPlay = false;
 				g_ui.screen = toy::AppScreen::Menu;
 			}
+		} else if (e->key_code == SAPP_KEYCODE_F11) {
+			g_ui.fullscreen = !g_ui.fullscreen;
+			applyFullscreenPref();
+			g_ui.settingsDirty = true;
 		} else if (e->key_code == SAPP_KEYCODE_R) {
 			if (g_ui.screen == toy::AppScreen::Match && g_session.mode() == toy::AppMode::Offline) {
 				startOfflineMatch();
@@ -298,6 +352,7 @@ void event(const sapp_event* e)
 					const char* err = g_session.lastError();
 					if (err && err[0]) {
 						toy::uiPushToast(g_ui, err, 2.8f);
+						toy::sessionLogf("WARN", "play rejected: %s", err);
 					}
 				}
 			}
@@ -324,6 +379,8 @@ void event(const sapp_event* e)
 void cleanup()
 {
 	saveSettingsIfDirty();
+	toy::sessionLog("INFO", "app cleanup");
+	toy::sessionLogClose();
 	g_session.shutdown(&g_match);
 	destroyScene();
 	toy::uiShutdown();
@@ -334,14 +391,20 @@ void cleanup()
 
 sapp_desc sokol_main(int /*argc*/, char* /*argv*/[])
 {
+	// Load settings early for window size / fullscreen / vsync
+	toy::Settings early{};
+	const bool hasSettings = toy::settingsLoad(early);
+
 	sapp_desc d = {};
 	d.init_cb = init;
 	d.frame_cb = frame;
 	d.event_cb = event;
 	d.cleanup_cb = cleanup;
-	d.width = 1440;
-	d.height = 900;
+	d.width = hasSettings ? early.windowWidth : 1440;
+	d.height = hasSettings ? early.windowHeight : 900;
 	d.sample_count = 4;
+	d.fullscreen = hasSettings ? early.fullscreen : false;
+	d.swap_interval = (hasSettings && !early.vsync) ? 0 : 1;
 	d.window_title = "Oyuncak Asker Masa Savasi — v0.6 Solid Core";
 	d.logger.func = slog_func;
 	d.high_dpi = true;

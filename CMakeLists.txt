@@ -113,6 +113,10 @@ add_library(toy_game STATIC
 	src/game/play_reason.h
 	src/app/settings.cpp
 	src/app/settings.h
+	src/app/i18n.cpp
+	src/app/i18n.h
+	src/app/session_log.cpp
+	src/app/session_log.h
 	src/physics/table_scene.cpp
 	src/physics/table_scene.h
 	src/net/socket.cpp
@@ -164,6 +168,12 @@ add_executable(toy_balance_report src/balance_report_main.cpp)
 target_link_libraries(toy_balance_report PRIVATE toy_game)
 if(MSVC)
 	set_property(TARGET toy_balance_report PROPERTY VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+endif()
+
+add_executable(toy_golden_seed_test src/game/golden_seed_test_main.cpp)
+target_link_libraries(toy_golden_seed_test PRIVATE toy_game)
+if(MSVC)
+	set_property(TARGET toy_golden_seed_test PROPERTY VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
 endif()
 
 # ---------------------------------------------------------------------------

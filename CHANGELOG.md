@@ -10,7 +10,7 @@ All notable changes to **Oyuncak Asker Masa Savaşı (toy-soldiers)** are docume
 
 ## [0.6.0-dev] — 2026-07-09
 
-### Added — v0.6 Solid Core (P0 slice)
+### Added — v0.6 Solid Core (P0 + P1)
 - App screens: **Menu → Lobby → Match → Results** (+ Settings / How to Play)
 - Settings persistence (`%APPDATA%/toy-soldiers/settings.ini`)
 - Illegal-play reasons as toasts ("Not your turn", "Sandstorm: adjacent only", …)
@@ -18,7 +18,13 @@ All notable changes to **Oyuncak Asker Masa Savaşı (toy-soldiers)** are docume
 - Auto-select first legal target each turn
 - Protocol version shown in lobby/match UI
 - `scripts/verify.ps1` one-command test gate
-- Pause overlay (Esc) with leave-to-menu
+- Pause overlay (Esc) with rules reminder + **confirm leave**
+- **P1:** fullscreen/VSync/resolution prefs, FPS & sync debug, high-contrast theme, UI scale
+- **P1:** EN/TR UI strings + glossary; card tooltips with keywords
+- **P1:** Continue last mode; rematch keeps cosmetics/map + new seed
+- **P1:** Post-match Play again / Change loadout / Menu
+- **P1:** Session log file (no secrets); golden-seed determinism test
+- **P1:** Client reject soft-fail toasts
 
 ## [0.5.0] — 2026-07-09
 

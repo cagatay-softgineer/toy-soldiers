@@ -36,10 +36,21 @@ struct UiState {
 	int towerSkinIndex = 0;
 	int accessoryIndex = 0;
 
-	bool showHowToPlay = false; // full-screen help (first run or Help)
+	bool showHowToPlay = false;
 	bool autoOrbit = true;
 	float masterVolume = 1.0f;
 	int uiScalePercent = 100;
+
+	// P1 display / debug
+	bool fullscreen = false;
+	bool vsync = true;
+	int windowWidth = 1440;
+	int windowHeight = 900;
+	bool showFps = false;
+	bool showSyncGen = false;
+	bool highContrast = false;
+	int language = 0; // 0 EN 1 TR
+	int lastMode = 0; // LastMode
 
 	uint32_t lastToastSync = 0;
 	char toast[160] = {};
@@ -53,8 +64,11 @@ struct UiState {
 
 	// Pause overlay in match
 	bool pauseOpen = false;
+	bool leaveConfirmOpen = false;
 
 	bool settingsDirty = false;
+	bool wantFullscreenToggle = false; // consumed by main
+	bool wantApplyDisplay = false;
 };
 
 void uiInit();

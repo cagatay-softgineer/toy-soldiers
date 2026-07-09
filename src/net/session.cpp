@@ -382,22 +382,46 @@ bool NetSession::hostRematch(Match& match)
 	if (mode_ != AppMode::Host) {
 		return false;
 	}
-	// Keep seat assignments; re-enter lobby or immediate rematch.
+	// Keep seats + cosmetics + map; new seed (v0.6 P1 #23).
+	const MapId map = match.config.mapId;
+	const bool events = match.config.eventsEnabled;
+	const bool fillAI = match.config.fillEmptyWithAI;
+	Cosmetics kept[kMaxPlayers];
+	SeatControl controls[kMaxPlayers];
+	char names[kMaxPlayers][kPlayerNameLen];
+	TowerType towers[kMaxPlayers];
+	for (int i = 0; i < kMaxPlayers; ++i) {
+		kept[i] = match.players[static_cast<size_t>(i)].cosmetics;
+		controls[i] = match.players[static_cast<size_t>(i)].control;
+		std::snprintf(names[i], kPlayerNameLen, "%s", match.players[static_cast<size_t>(i)].name);
+		towers[i] = match.players[static_cast<size_t>(i)].tower;
+	}
+
+	match.config.seed = match.rng + 97u + match.matchId * 3u;
+	match.config.mapId = map;
+	match.config.eventsEnabled = events;
+	match.config.fillEmptyWithAI = fillAI;
 	match.phase = Phase::Lobby;
 	for (int i = 0; i < match.config.playerCount; ++i) {
 		Player& p = match.players[static_cast<size_t>(i)];
-		if (p.control == SeatControl::AI) {
-			// Keep AI seats for rematch auto-fill path.
-		}
-		p.ready = (p.control == SeatControl::HumanLocal);
+		p.control = controls[i];
+		p.cosmetics = kept[i];
+		p.setName(names[i]);
+		p.tower = towers[i];
+		p.ready = (p.control == SeatControl::HumanLocal || p.control == SeatControl::AI);
 		p.eliminated = false;
 	}
-	// Immediate rematch for jam UX.
 	startMatchFromLobby(match);
+	// Restore cosmetics after startMatchFromLobby (AI re-rolls cosmetics)
+	for (int i = 0; i < match.config.playerCount; ++i) {
+		if (controls[i] != SeatControl::AI) {
+			match.players[static_cast<size_t>(i)].cosmetics = kept[i];
+		}
+	}
 	sceneNeedsRebuild_ = true;
 	lastSeenMatchId_ = match.matchId;
 	broadcastSnapshot(match);
-	setStatus("Rematch started");
+	setStatus("Rematch started (same map/loadouts, new seed)");
 	return true;
 }
 
@@ -568,7 +592,9 @@ void NetSession::clientOnMessage(Match& match, const std::vector<uint8_t>& frame
 	case net::MsgType::Reject: {
 		std::string reason;
 		if (net::readString(payload, payloadSize, reason)) {
-			setStatus(("Rejected: " + reason).c_str());
+			const std::string msg = "Rejected: " + reason;
+			setStatus(msg.c_str());
+			setError(msg.c_str()); // UI toasts soft-fail on client
 		}
 		break;
 	}

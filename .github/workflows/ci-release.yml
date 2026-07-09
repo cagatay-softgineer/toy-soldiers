@@ -22,7 +22,7 @@ jobs:
   test:
     name: Build & test (Windows)
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - name: Checkout toy-soldiers
         uses: actions/checkout@v4
@@ -36,37 +36,54 @@ jobs:
       - name: Setup CMake
         uses: lukka/get-cmake@latest
 
+      - name: Setup Ninja
+        uses: seanmiddleditch/gha-setup-ninja@v5
+
+      - name: Setup MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
       - name: Configure
         shell: pwsh
         run: |
           $box = Join-Path $env:GITHUB_WORKSPACE "box3d-src"
-          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DTOY_BOX3D_DIR="$box"
+          cmake -S . -B build -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DTOY_BOX3D_DIR="$box"
 
       - name: Build Release
-        run: cmake --build build --config Release --parallel
+        run: cmake --build build --parallel
 
       - name: Run headless tests
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $bin = "build/bin/Release"
+          $bin = "build/bin"
+          if (-not (Test-Path "$bin/toy_sim.exe")) { $bin = "build/bin/Release" }
+          Get-ChildItem $bin -Filter *.exe | ForEach-Object { $_.FullName }
           & "$bin/toy_sim.exe"
           & "$bin/toy_event_test.exe"
           & "$bin/toy_cosmetic_test.exe"
           & "$bin/toy_balance_report.exe"
-          # Loopback net test (host+client same machine)
           & "$bin/toy_net_test.exe"
+
+      - name: Stage artifacts
+        shell: pwsh
+        run: |
+          $bin = "build/bin"
+          if (-not (Test-Path "$bin/toy_sim.exe")) { $bin = "build/bin/Release" }
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item "$bin/*.exe" dist/ -ErrorAction SilentlyContinue
+          Copy-Item README.md, CHANGELOG.md, LICENSE dist/ -ErrorAction SilentlyContinue
+          Copy-Item -Recurse docs dist/docs -ErrorAction SilentlyContinue
 
       - name: Upload Windows artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: toy-soldiers-windows-Release
-          path: |
-            build/bin/Release/*.exe
-            README.md
-            docs/**
-            LICENSE*
+          path: dist/**
           if-no-files-found: warn
 
   continuous-release:
@@ -88,10 +105,8 @@ jobs:
 
       - name: Package zip
         run: |
-          mkdir -p release-pkg
-          cp -r dist/* release-pkg/ || true
-          cd release-pkg
-          zip -r ../toy-soldiers-windows.zip . || (cd .. && tar -a -c -f toy-soldiers-windows.zip -C release-pkg .)
+          cd dist
+          zip -r ../toy-soldiers-windows.zip . || python -c "import shutil; shutil.make_archive('../toy-soldiers-windows','zip','./')"
 
       - name: Create continuous GitHub Release
         env:
@@ -102,20 +117,17 @@ jobs:
           RUN="${GITHUB_RUN_NUMBER}"
           TAG="v0.0.0-dev.${RUN}+${SHORT_SHA}"
           TITLE="Continuous ${TAG}"
-          NOTES="$(cat <<EOF
-          ## Continuous release (auto)
+          NOTES="## Continuous release (auto)
 
-          - **Commit:** ${GITHUB_SHA}
-          - **Branch:** ${GITHUB_REF_NAME}
+          - **Commit:** \`${GITHUB_SHA}\`
+          - **Branch:** \`${GITHUB_REF_NAME}\`
           - **Run:** [#${RUN}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})
-          - **Channel:** pre-release / dev (not a stable version tag)
+          - **Channel:** pre-release / dev
 
           Built on \`windows-latest\` after headless tests.
-          See [ROADMAP_to_v1.md](docs/ROADMAP_to_v1.md) for product milestones toward v1.0.
-          EOF
-          )"
+          Roadmap: [docs/ROADMAP_to_v1.md](docs/ROADMAP_to_v1.md)
+          "
 
-          # Delete previous continuous tag if re-running same tag (unlikely with run number)
           gh release delete "$TAG" -y 2>/dev/null || true
           git push origin ":refs/tags/$TAG" 2>/dev/null || true
 

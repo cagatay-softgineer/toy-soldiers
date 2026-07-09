@@ -5,13 +5,12 @@ All notable changes to **Oyuncak Asker Masa Savaşı (toy-soldiers)** are docume
 ## [Unreleased]
 
 ### Planned
-- Remaining v0.6 P1/P2 items (fullscreen, crash handler, etc.)
-- See [docs/ROADMAP_to_v1.md](docs/ROADMAP_to_v1.md)
+- v0.7 Deep Toybox — see [docs/ROADMAP_to_v1.md](docs/ROADMAP_to_v1.md)
 
 ## [0.6.0-dev] — 2026-07-09
 
-### Added — v0.6 Solid Core (P0 + P1)
-- App screens: **Menu → Lobby → Match → Results** (+ Settings / How to Play)
+### Added — v0.6 Solid Core (P0 + P1 + P2)
+- App screens: **Menu → Lobby → Match → Results** (+ Settings / How to Play / **Credits**)
 - Settings persistence (`%APPDATA%/toy-soldiers/settings.ini`)
 - Illegal-play reasons as toasts ("Not your turn", "Sandstorm: adjacent only", …)
 - Turn-change banner (~0.85s)
@@ -25,6 +24,13 @@ All notable changes to **Oyuncak Asker Masa Savaşı (toy-soldiers)** are docume
 - **P1:** Post-match Play again / Change loadout / Menu
 - **P1:** Session log file (no secrets); golden-seed determinism test
 - **P1:** Client reject soft-fail toasts
+- **P2:** Credits screen (Box3D, sokol, ImGui, team)
+- **P2:** Coach tips for first 3 completed matches (toggle in Settings)
+- **P2:** Settings export/import JSON (next to settings.ini)
+- **P2:** Match timeline scrubber (battle log + results)
+- **P2:** AddressSanitizer Debug preset (`windows-asan`) + [docs/ASAN.md](docs/ASAN.md)
+- **P2:** Windows crash minidumps under `%APPDATA%/toy-soldiers/crashes/`
+- **P2:** Reduced motion (no auto-orbit, shorter toasts/banners)
 
 ## [0.5.0] — 2026-07-09
 

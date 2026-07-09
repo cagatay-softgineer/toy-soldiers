@@ -20,11 +20,24 @@
         "CMAKE_BUILD_TYPE": "Release",
         "TOY_BOX3D_DIR": "${sourceDir}/../box3d"
       }
+    },
+    {
+      "name": "windows-asan",
+      "displayName": "Windows Debug + AddressSanitizer",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" },
+      "binaryDir": "${sourceDir}/build-asan",
+      "cacheVariables": {
+        "TOY_BOX3D_DIR": "${sourceDir}/../box3d",
+        "CMAKE_MSVC_DEBUG_INFORMATION_FORMAT": "ProgramDatabase",
+        "CMAKE_C_FLAGS_DEBUG": "/Zi /Od /Ob0 /RTC1 /fsanitize=address",
+        "CMAKE_CXX_FLAGS_DEBUG": "/Zi /Od /Ob0 /RTC1 /fsanitize=address /EHsc"
+      }
     }
   ],
   "buildPresets": [
     { "name": "windows-debug",   "configurePreset": "windows", "configuration": "Debug" },
     { "name": "windows-release", "configurePreset": "windows", "configuration": "Release" },
+    { "name": "windows-asan",    "configurePreset": "windows-asan", "configuration": "Debug" },
     { "name": "linux-release",   "configurePreset": "linux-release" }
   ]
 }

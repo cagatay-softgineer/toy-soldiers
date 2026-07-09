@@ -93,6 +93,12 @@ void uiApplySettings(UiState& ui, const Settings& s)
 	ui.highContrast = s.highContrast;
 	ui.language = s.language;
 	ui.lastMode = s.lastMode;
+	ui.reducedMotion = s.reducedMotion;
+	ui.coachTips = s.coachTips;
+	ui.matchesCompleted = s.matchesCompleted;
+	if (ui.reducedMotion) {
+		ui.autoOrbit = false;
+	}
 	i18nSetLang(s.language == 1 ? Lang::Tr : Lang::En);
 }
 
@@ -121,6 +127,9 @@ void uiCaptureSettings(const UiState& ui, Settings& s)
 	s.highContrast = ui.highContrast;
 	s.language = ui.language;
 	s.lastMode = ui.lastMode;
+	s.reducedMotion = ui.reducedMotion;
+	s.coachTips = ui.coachTips;
+	s.matchesCompleted = ui.matchesCompleted;
 }
 
 void uiPushToast(UiState& ui, const char* text, float seconds)
@@ -129,7 +138,15 @@ void uiPushToast(UiState& ui, const char* text, float seconds)
 		return;
 	}
 	std::snprintf(ui.toast, sizeof(ui.toast), "%s", text);
-	ui.toastTimer = seconds;
+	// P2 #36: reduced motion shortens toasts
+	float t = seconds;
+	if (ui.reducedMotion) {
+		t = (t > 1.2f) ? 1.2f : t * 0.55f;
+		if (t < 0.6f) {
+			t = 0.6f;
+		}
+	}
+	ui.toastTimer = t;
 }
 
 MatchConfig uiMakeConfig(const UiState& ui, uint32_t seed)
@@ -219,14 +236,14 @@ void drawToastsAndBanners(Match& match, UiState& ui)
 		}
 	}
 
-	// Turn banner
+	// Turn banner (shorter when reduced motion)
 	if (match.phase == Phase::Playing) {
 		if (ui.lastTurnSeen != match.turnNumber || ui.lastActiveSeen != match.activePlayer) {
 			ui.lastTurnSeen = match.turnNumber;
 			ui.lastActiveSeen = match.activePlayer;
 			const Player& ap = match.players[static_cast<size_t>(match.activePlayer)];
 			std::snprintf(ui.turnBanner, sizeof(ui.turnBanner), "Turn %d — %s", match.turnNumber, ap.name);
-			ui.turnBannerTimer = 0.85f;
+			ui.turnBannerTimer = ui.reducedMotion ? 0.4f : 0.85f;
 		}
 	} else {
 		ui.lastTurnSeen = -1;
@@ -476,10 +493,139 @@ void drawMenuV2(UiState& ui)
 	if (ImGui::Button(tr("menu.howto"), ImVec2(-1, 32))) {
 		ui.showHowToPlay = true;
 	}
+	if (ImGui::Button(tr("menu.credits"), ImVec2(-1, 32))) {
+		ui.screen = AppScreen::Credits;
+	}
 	if (ImGui::Button(tr("menu.quit"), ImVec2(-1, 32))) {
 		sapp_request_quit();
 	}
 	ImGui::End();
+}
+
+void drawCredits(UiState& ui)
+{
+	const ImGuiViewport* vp = ImGui::GetMainViewport();
+	ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.42f),
+							ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+	ImGui::SetNextWindowSize(ImVec2(480, 0), ImGuiCond_Always);
+	ImGui::Begin(tr("credits.title"), nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse);
+
+	ImGui::TextColored(ImVec4(0.96f, 0.77f, 0.36f, 1.0f), "%s", tr("app.title"));
+	ImGui::TextDisabled("v0.6 Solid Core");
+	ImGui::Separator();
+	ImGui::TextUnformatted("Game");
+	ImGui::BulletText("Design & code — preunec / cagatay-softgineer");
+	ImGui::BulletText("Concept board — Toy Soldiers tabletop jam brief");
+	ImGui::Spacing();
+	ImGui::TextUnformatted("Engine & libraries");
+	ImGui::BulletText("Box3D — Erin Catto (physics)");
+	ImGui::BulletText("sokol — Andre Weissflog (app / gfx / imgui glue)");
+	ImGui::BulletText("Dear ImGui — Omar Cornut");
+	ImGui::Spacing();
+	ImGui::TextUnformatted("Thanks");
+	ImGui::BulletText("Playtesters and jam friends");
+	ImGui::BulletText("Open-source community");
+	ImGui::Separator();
+	ImGui::TextWrapped("Minidumps (if any): %%APPDATA%%/toy-soldiers/crashes/");
+	ImGui::TextDisabled("Protocol v%u · Default port %u", static_cast<unsigned>(kProtocolVersion),
+						static_cast<unsigned>(kDefaultPort));
+	if (ImGui::Button(tr("credits.back"), ImVec2(-1, 36))) {
+		ui.screen = AppScreen::Menu;
+	}
+	ImGui::End();
+}
+
+const char* coachTipKey(int matchesCompleted)
+{
+	if (matchesCompleted <= 0) {
+		return "coach.tip0";
+	}
+	if (matchesCompleted == 1) {
+		return "coach.tip1";
+	}
+	return "coach.tip2";
+}
+
+void drawCoachTip(UiState& ui)
+{
+	if (!ui.coachTips || ui.coachTipDismissed || ui.matchesCompleted >= 3) {
+		return;
+	}
+	const ImGuiViewport* vp = ImGui::GetMainViewport();
+	ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + 16, vp->WorkPos.y + vp->WorkSize.y - 140), ImGuiCond_Always);
+	ImGui::SetNextWindowSize(ImVec2(420, 0), ImGuiCond_Always);
+	ImGui::SetNextWindowBgAlpha(0.92f);
+	if (ImGui::Begin("##coach", nullptr,
+					 ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoResize |
+						 ImGuiWindowFlags_NoMove)) {
+		ImGui::TextColored(ImVec4(0.96f, 0.77f, 0.36f, 1.0f), "Coach");
+		ImGui::TextWrapped("%s", tr(coachTipKey(ui.matchesCompleted)));
+		if (ImGui::Button(tr("coach.dismiss"), ImVec2(120, 28))) {
+			ui.coachTipDismissed = true;
+		}
+	}
+	ImGui::End();
+}
+
+void drawTimelineScrubber(Match& match, UiState& ui)
+{
+	if (!ui.showTimeline || match.log.empty()) {
+		return;
+	}
+	const int n = static_cast<int>(match.log.size());
+	if (ui.timelineIndex < 0 || ui.timelineIndex >= n) {
+		ui.timelineIndex = n - 1;
+	}
+	const ImGuiViewport* vp = ImGui::GetMainViewport();
+	ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y - 12),
+							ImGuiCond_Always, ImVec2(0.5f, 1.0f));
+	ImGui::SetNextWindowSize(ImVec2(560, 0), ImGuiCond_Always);
+	ImGui::SetNextWindowBgAlpha(0.9f);
+	if (ImGui::Begin(tr("timeline.title"), &ui.showTimeline, ImGuiWindowFlags_AlwaysAutoResize)) {
+		ImGui::Text("%s %d / %d", tr("timeline.scrub"), ui.timelineIndex + 1, n);
+		if (ImGui::SliderInt("##scrub", &ui.timelineIndex, 0, n - 1)) {
+			// read-only navigate
+		}
+		const MatchEvent& ev = match.log[static_cast<size_t>(ui.timelineIndex)];
+		ImGui::Separator();
+		if (ev.type == MatchEvent::Type::WorldEvent) {
+			ImGui::TextColored(ImVec4(0.55f, 0.85f, 1.0f, 1.0f), "%s", ev.text.c_str());
+		} else if (ev.type == MatchEvent::Type::Winner) {
+			ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.5f, 1.0f), "%s", ev.text.c_str());
+		} else {
+			ImGui::TextWrapped("%s", ev.text.c_str());
+		}
+		if (ImGui::SmallButton("<<")) {
+			ui.timelineIndex = 0;
+		}
+		ImGui::SameLine();
+		if (ImGui::SmallButton("<") && ui.timelineIndex > 0) {
+			--ui.timelineIndex;
+		}
+		ImGui::SameLine();
+		if (ImGui::SmallButton(">") && ui.timelineIndex < n - 1) {
+			++ui.timelineIndex;
+		}
+		ImGui::SameLine();
+		if (ImGui::SmallButton(">>")) {
+			ui.timelineIndex = n - 1;
+		}
+	}
+	ImGui::End();
+}
+
+// JSON path next to settings.ini
+void settingsJsonPath(char* out, int cap)
+{
+	const char* sp = settingsPath();
+	std::snprintf(out, static_cast<size_t>(cap), "%s", sp);
+	// replace .ini with .json or append
+	char* dot = std::strrchr(out, '.');
+	if (dot && (std::strcmp(dot, ".ini") == 0)) {
+		std::snprintf(dot, static_cast<size_t>(cap - static_cast<int>(dot - out)), ".json");
+	} else {
+		std::strncat(out, ".json", static_cast<size_t>(cap - std::strlen(out) - 1));
+	}
 }
 
 void drawSettings(UiState& ui)
@@ -494,8 +640,23 @@ void drawSettings(UiState& ui)
 	ImGui::InputText(tr("menu.join_ip"), ui.joinHost, sizeof(ui.joinHost));
 	ImGui::InputInt("Join port", &ui.joinPort);
 	ImGui::InputInt("Host port", &ui.hostPort);
-	ImGui::Checkbox(tr("settings.auto_orbit"), &ui.autoOrbit);
+	if (ImGui::Checkbox(tr("settings.auto_orbit"), &ui.autoOrbit)) {
+		ui.settingsDirty = true;
+	}
+	if (ui.reducedMotion && ui.autoOrbit) {
+		ui.autoOrbit = false;
+	}
 	ImGui::SliderFloat("Master volume (placeholder)", &ui.masterVolume, 0.0f, 1.0f);
+	if (ImGui::Checkbox(tr("settings.reduced_motion"), &ui.reducedMotion)) {
+		if (ui.reducedMotion) {
+			ui.autoOrbit = false;
+		}
+		ui.settingsDirty = true;
+	}
+	if (ImGui::Checkbox(tr("settings.coach_tips"), &ui.coachTips)) {
+		ui.settingsDirty = true;
+	}
+	ImGui::TextDisabled("Matches completed (local): %d", ui.matchesCompleted);
 
 	ImGui::Separator();
 	ImGui::TextUnformatted(tr("settings.language"));
@@ -535,6 +696,32 @@ void drawSettings(UiState& ui)
 	ImGui::Checkbox(tr("settings.show_sync"), &ui.showSyncGen);
 	ImGui::Checkbox("Show how-to on first run", &ui.showHowToPlay);
 	ImGui::TextDisabled("Settings file: %s", settingsPath());
+
+	ImGui::Separator();
+	char jsonPath[512];
+	settingsJsonPath(jsonPath, static_cast<int>(sizeof(jsonPath)));
+	ImGui::TextDisabled("JSON: %s", jsonPath);
+	if (ImGui::Button(tr("settings.export_json"), ImVec2(-1, 28))) {
+		Settings snap;
+		uiCaptureSettings(ui, snap);
+		if (settingsExportJson(snap, jsonPath)) {
+			uiPushToast(ui, "Settings exported to JSON", 2.5f);
+		} else {
+			uiPushToast(ui, "Export failed", 2.5f);
+		}
+	}
+	if (ImGui::Button(tr("settings.import_json"), ImVec2(-1, 28))) {
+		Settings loaded;
+		settingsReset(loaded);
+		if (settingsImportJson(loaded, jsonPath)) {
+			uiApplySettings(ui, loaded);
+			ui.settingsDirty = true;
+			ui.wantApplyDisplay = true;
+			uiPushToast(ui, "Settings imported from JSON", 2.5f);
+		} else {
+			uiPushToast(ui, "Import failed (file missing?)", 2.5f);
+		}
+	}
 
 	if (ImGui::Button(tr("settings.save"), ImVec2(120, 32))) {
 		ui.settingsDirty = true;
@@ -844,19 +1031,46 @@ void drawMatchHud(Match& match, NetSession& session, UiState& ui)
 		}
 	}
 
-	// Log
+	// Battle log + optional live scrubber (P2 #25)
 	ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x - 360, vp->WorkPos.y + 220), ImGuiCond_FirstUseEver);
-	ImGui::SetNextWindowSize(ImVec2(348, 220), ImGuiCond_FirstUseEver);
+	ImGui::SetNextWindowSize(ImVec2(348, 260), ImGuiCond_FirstUseEver);
 	ImGui::Begin("Battle Log");
-	for (int i = static_cast<int>(match.log.size()) - 1; i >= 0 && i >= static_cast<int>(match.log.size()) - 20; --i) {
+	if (!match.log.empty()) {
+		const int n = static_cast<int>(match.log.size());
+		if (ui.timelineIndex < 0 || ui.timelineIndex >= n) {
+			ui.timelineIndex = n - 1;
+		}
+		ImGui::Text("%s %d/%d", tr("timeline.scrub"), ui.timelineIndex + 1, n);
+		ImGui::SliderInt("##live_scrub", &ui.timelineIndex, 0, n - 1);
+		const MatchEvent& focus = match.log[static_cast<size_t>(ui.timelineIndex)];
+		if (focus.type == MatchEvent::Type::WorldEvent) {
+			ImGui::TextColored(ImVec4(0.55f, 0.85f, 1.0f, 1.0f), "%s", focus.text.c_str());
+		} else {
+			ImGui::TextWrapped("%s", focus.text.c_str());
+		}
+		ImGui::Separator();
+		ImGui::TextDisabled("Recent");
+	}
+	for (int i = static_cast<int>(match.log.size()) - 1; i >= 0 && i >= static_cast<int>(match.log.size()) - 12; --i) {
 		const MatchEvent& ev = match.log[static_cast<size_t>(i)];
+		const bool hi = (i == ui.timelineIndex);
+		if (hi) {
+			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.96f, 0.77f, 0.36f, 1.0f));
+		}
 		if (ev.type == MatchEvent::Type::WorldEvent) {
-			ImGui::TextColored(ImVec4(0.55f, 0.85f, 1.0f, 1.0f), "%s", ev.text.c_str());
+			ImGui::TextColored(hi ? ImVec4(0.96f, 0.77f, 0.36f, 1.0f) : ImVec4(0.55f, 0.85f, 1.0f, 1.0f), "%s",
+							   ev.text.c_str());
 		} else {
 			ImGui::TextWrapped("%s", ev.text.c_str());
 		}
+		if (hi) {
+			ImGui::PopStyleColor();
+		}
 	}
 	ImGui::End();
+
+	// Coach tips during early matches (P2 #13)
+	drawCoachTip(ui);
 
 	if (match.phase == Phase::GameOver) {
 		ui.screen = AppScreen::Results;
@@ -930,8 +1144,18 @@ void drawMatchHud(Match& match, NetSession& session, UiState& ui)
 
 void drawResults(Match& match, NetSession& session, UiState& ui)
 {
+	// Count completed match once (coach tips + persistence)
+	if (!ui.matchCounted) {
+		ui.matchCounted = true;
+		++ui.matchesCompleted;
+		ui.coachTipDismissed = false;
+		ui.settingsDirty = true;
+		ui.showTimeline = true;
+		ui.timelineIndex = match.log.empty() ? -1 : static_cast<int>(match.log.size()) - 1;
+	}
+
 	const ImGuiViewport* vp = ImGui::GetMainViewport();
-	ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.45f),
+	ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.38f),
 							ImGuiCond_Always, ImVec2(0.5f, 0.5f));
 	ImGui::SetNextWindowSize(ImVec2(440, 0), ImGuiCond_Always);
 	ImGui::Begin("Results", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse);
@@ -952,23 +1176,29 @@ void drawResults(Match& match, NetSession& session, UiState& ui)
 	ImGui::Separator();
 	if (session.mode() == AppMode::Host && ImGui::Button(tr("results.rematch"), ImVec2(-1, 36))) {
 		session.hostRematch(match);
+		ui.matchCounted = false;
 		ui.screen = AppScreen::Match;
 	}
 	if (session.mode() == AppMode::Offline) {
 		if (ImGui::Button(tr("results.play_again"), ImVec2(-1, 36))) {
+			ui.matchCounted = false;
 			ui.selectedHand = -2; // offline again, same settings/cosmetics
 		}
 		if (ImGui::Button(tr("results.change_loadout"), ImVec2(-1, 36))) {
+			ui.matchCounted = false;
 			ui.selectedHand = -6;
 			ui.screen = AppScreen::Menu;
-			// User adjusts cosmetics on menu then Play Offline
 		}
 	}
 	if (ImGui::Button(tr("results.menu"), ImVec2(-1, 36))) {
+		ui.matchCounted = false;
 		ui.selectedHand = -6;
 		ui.screen = AppScreen::Menu;
 	}
 	ImGui::End();
+
+	// P2 #25: read-only match timeline scrubber on results
+	drawTimelineScrubber(match, ui);
 }
 
 } // namespace
@@ -1005,6 +1235,9 @@ void uiDraw(Match& match, NetSession& session, UiState& ui)
 	case AppScreen::HowToPlay:
 		ui.showHowToPlay = true;
 		ui.screen = AppScreen::Menu;
+		break;
+	case AppScreen::Credits:
+		drawCredits(ui);
 		break;
 	case AppScreen::Lobby:
 		drawLobbyScreen(match, session, ui);

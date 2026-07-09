@@ -70,6 +70,12 @@ void clampSettings(Settings& out)
 	if (out.lastMode < 0 || out.lastMode > 3) {
 		out.lastMode = 0;
 	}
+	if (out.matchesCompleted < 0) {
+		out.matchesCompleted = 0;
+	}
+	if (out.matchesCompleted > 99999) {
+		out.matchesCompleted = 99999;
+	}
 }
 
 } // namespace
@@ -171,6 +177,12 @@ bool settingsLoad(Settings& out)
 			out.language = std::atoi(val);
 		} else if (std::strcmp(key, "lastMode") == 0) {
 			out.lastMode = std::atoi(val);
+		} else if (std::strcmp(key, "reducedMotion") == 0) {
+			out.reducedMotion = parseBool(val, false);
+		} else if (std::strcmp(key, "coachTips") == 0) {
+			out.coachTips = parseBool(val, true);
+		} else if (std::strcmp(key, "matchesCompleted") == 0) {
+			out.matchesCompleted = std::atoi(val);
 		}
 	}
 	std::fclose(f);
@@ -209,8 +221,210 @@ bool settingsSave(const Settings& s)
 	std::fprintf(f, "highContrast=%d\n", tmp.highContrast ? 1 : 0);
 	std::fprintf(f, "language=%d\n", tmp.language);
 	std::fprintf(f, "lastMode=%d\n", tmp.lastMode);
+	std::fprintf(f, "reducedMotion=%d\n", tmp.reducedMotion ? 1 : 0);
+	std::fprintf(f, "coachTips=%d\n", tmp.coachTips ? 1 : 0);
+	std::fprintf(f, "matchesCompleted=%d\n", tmp.matchesCompleted);
 	std::fclose(f);
 	return true;
 }
 
+namespace {
+
+void jsonEscape(FILE* f, const char* s)
+{
+	if (!s) {
+		std::fputs("\"\"", f);
+		return;
+	}
+	std::fputc('"', f);
+	for (const char* p = s; *p; ++p) {
+		if (*p == '"' || *p == '\\') {
+			std::fputc('\\', f);
+		}
+		if (*p == '\n' || *p == '\r') {
+			continue;
+		}
+		std::fputc(*p, f);
+	}
+	std::fputc('"', f);
+}
+
+// Very small JSON string value extractor: "key":"value" or "key":123 or "key":true
+bool jsonFind(const char* json, const char* key, char* out, int outCap)
+{
+	char pattern[128];
+	std::snprintf(pattern, sizeof(pattern), "\"%s\"", key);
+	const char* p = std::strstr(json, pattern);
+	if (!p) {
+		return false;
+	}
+	p = std::strchr(p + std::strlen(pattern), ':');
+	if (!p) {
+		return false;
+	}
+	++p;
+	while (*p == ' ' || *p == '\t') {
+		++p;
+	}
+	if (*p == '"') {
+		++p;
+		int i = 0;
+		while (*p && *p != '"' && i + 1 < outCap) {
+			if (*p == '\\' && p[1]) {
+				++p;
+			}
+			out[i++] = *p++;
+		}
+		out[i] = 0;
+		return true;
+	}
+	// number / bool
+	int i = 0;
+	while (*p && *p != ',' && *p != '}' && *p != ' ' && i + 1 < outCap) {
+		out[i++] = *p++;
+	}
+	out[i] = 0;
+	return i > 0;
+}
+
+} // namespace
+
+bool settingsExportJson(const Settings& s, const char* path)
+{
+	if (!path) {
+		return false;
+	}
+	FILE* f = std::fopen(path, "wb");
+	if (!f) {
+		return false;
+	}
+	std::fputs("{\n", f);
+	std::fputs("  \"playerName\": ", f);
+	jsonEscape(f, s.playerName);
+	std::fputs(",\n", f);
+	std::fputs("  \"joinHost\": ", f);
+	jsonEscape(f, s.joinHost);
+	std::fprintf(f,
+				 ",\n  \"joinPort\": %d,\n  \"hostPort\": %d,\n  \"mapIndex\": %d,\n  \"eventsEnabled\": %s,\n  "
+				 "\"fillAI\": %s,\n  \"autoOrbit\": %s,\n  \"showHowToPlay\": %s,\n  \"masterVolume\": %.3f,\n  "
+				 "\"plasticIndex\": %d,\n  \"towerSkinIndex\": %d,\n  \"accessoryIndex\": %d,\n  \"uiScalePercent\": "
+				 "%d,\n  \"fullscreen\": %s,\n  \"vsync\": %s,\n  \"windowWidth\": %d,\n  \"windowHeight\": %d,\n  "
+				 "\"showFps\": %s,\n  \"showSyncGen\": %s,\n  \"highContrast\": %s,\n  \"language\": %d,\n  "
+				 "\"lastMode\": %d,\n  \"reducedMotion\": %s,\n  \"coachTips\": %s,\n  \"matchesCompleted\": %d\n}\n",
+				 s.joinPort, s.hostPort, s.mapIndex, s.eventsEnabled ? "true" : "false", s.fillAI ? "true" : "false",
+				 s.autoOrbit ? "true" : "false", s.showHowToPlay ? "true" : "false", static_cast<double>(s.masterVolume),
+				 s.plasticIndex, s.towerSkinIndex, s.accessoryIndex, s.uiScalePercent,
+				 s.fullscreen ? "true" : "false", s.vsync ? "true" : "false", s.windowWidth, s.windowHeight,
+				 s.showFps ? "true" : "false", s.showSyncGen ? "true" : "false", s.highContrast ? "true" : "false",
+				 s.language, s.lastMode, s.reducedMotion ? "true" : "false", s.coachTips ? "true" : "false",
+				 s.matchesCompleted);
+	std::fclose(f);
+	return true;
+}
+
+bool settingsImportJson(Settings& out, const char* path)
+{
+	if (!path) {
+		return false;
+	}
+	FILE* f = std::fopen(path, "rb");
+	if (!f) {
+		return false;
+	}
+	std::fseek(f, 0, SEEK_END);
+	long sz = std::ftell(f);
+	std::fseek(f, 0, SEEK_SET);
+	if (sz <= 0 || sz > 64 * 1024) {
+		std::fclose(f);
+		return false;
+	}
+	std::string buf(static_cast<size_t>(sz) + 1, '\0');
+	const size_t rd = std::fread(buf.data(), 1, static_cast<size_t>(sz), f);
+	std::fclose(f);
+	buf.resize(rd);
+	const char* j = buf.c_str();
+	char v[256];
+	if (jsonFind(j, "playerName", v, sizeof(v))) {
+		std::snprintf(out.playerName, sizeof(out.playerName), "%s", v);
+	}
+	if (jsonFind(j, "joinHost", v, sizeof(v))) {
+		std::snprintf(out.joinHost, sizeof(out.joinHost), "%s", v);
+	}
+	if (jsonFind(j, "joinPort", v, sizeof(v))) {
+		out.joinPort = std::atoi(v);
+	}
+	if (jsonFind(j, "hostPort", v, sizeof(v))) {
+		out.hostPort = std::atoi(v);
+	}
+	if (jsonFind(j, "mapIndex", v, sizeof(v))) {
+		out.mapIndex = std::atoi(v);
+	}
+	if (jsonFind(j, "eventsEnabled", v, sizeof(v))) {
+		out.eventsEnabled = parseBool(v, true);
+	}
+	if (jsonFind(j, "fillAI", v, sizeof(v))) {
+		out.fillAI = parseBool(v, true);
+	}
+	if (jsonFind(j, "autoOrbit", v, sizeof(v))) {
+		out.autoOrbit = parseBool(v, true);
+	}
+	if (jsonFind(j, "showHowToPlay", v, sizeof(v))) {
+		out.showHowToPlay = parseBool(v, true);
+	}
+	if (jsonFind(j, "masterVolume", v, sizeof(v))) {
+		out.masterVolume = static_cast<float>(std::atof(v));
+	}
+	if (jsonFind(j, "plasticIndex", v, sizeof(v))) {
+		out.plasticIndex = std::atoi(v);
+	}
+	if (jsonFind(j, "towerSkinIndex", v, sizeof(v))) {
+		out.towerSkinIndex = std::atoi(v);
+	}
+	if (jsonFind(j, "accessoryIndex", v, sizeof(v))) {
+		out.accessoryIndex = std::atoi(v);
+	}
+	if (jsonFind(j, "uiScalePercent", v, sizeof(v))) {
+		out.uiScalePercent = std::atoi(v);
+	}
+	if (jsonFind(j, "fullscreen", v, sizeof(v))) {
+		out.fullscreen = parseBool(v, false);
+	}
+	if (jsonFind(j, "vsync", v, sizeof(v))) {
+		out.vsync = parseBool(v, true);
+	}
+	if (jsonFind(j, "windowWidth", v, sizeof(v))) {
+		out.windowWidth = std::atoi(v);
+	}
+	if (jsonFind(j, "windowHeight", v, sizeof(v))) {
+		out.windowHeight = std::atoi(v);
+	}
+	if (jsonFind(j, "showFps", v, sizeof(v))) {
+		out.showFps = parseBool(v, false);
+	}
+	if (jsonFind(j, "showSyncGen", v, sizeof(v))) {
+		out.showSyncGen = parseBool(v, false);
+	}
+	if (jsonFind(j, "highContrast", v, sizeof(v))) {
+		out.highContrast = parseBool(v, false);
+	}
+	if (jsonFind(j, "language", v, sizeof(v))) {
+		out.language = std::atoi(v);
+	}
+	if (jsonFind(j, "lastMode", v, sizeof(v))) {
+		out.lastMode = std::atoi(v);
+	}
+	if (jsonFind(j, "reducedMotion", v, sizeof(v))) {
+		out.reducedMotion = parseBool(v, false);
+	}
+	if (jsonFind(j, "coachTips", v, sizeof(v))) {
+		out.coachTips = parseBool(v, true);
+	}
+	if (jsonFind(j, "matchesCompleted", v, sizeof(v))) {
+		out.matchesCompleted = std::atoi(v);
+	}
+	clampSettings(out);
+	return true;
+}
+
 } // namespace toy
+

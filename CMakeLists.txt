@@ -117,6 +117,8 @@ add_library(toy_game STATIC
 	src/app/i18n.h
 	src/app/session_log.cpp
 	src/app/session_log.h
+	src/app/crash_handler.cpp
+	src/app/crash_handler.h
 	src/physics/table_scene.cpp
 	src/physics/table_scene.h
 	src/net/socket.cpp

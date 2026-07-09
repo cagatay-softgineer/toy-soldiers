@@ -39,11 +39,20 @@ struct Settings {
 	bool highContrast = false;
 	int language = 0; // 0=EN 1=TR
 	int lastMode = 0; // LastMode
+
+	// P2
+	bool reducedMotion = false;   // shorter toasts, no auto-orbit
+	bool coachTips = true;        // tips for first N completed matches
+	int matchesCompleted = 0;     // local counter for coach tips
 };
 
 bool settingsLoad(Settings& out);
 bool settingsSave(const Settings& s);
 void settingsReset(Settings& out);
 const char* settingsPath();
+
+// JSON export/import (v0.6 P2 #19) — simple hand-written object, no deps.
+bool settingsExportJson(const Settings& s, const char* path);
+bool settingsImportJson(Settings& out, const char* path);
 
 } // namespace toy

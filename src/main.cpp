@@ -1,3 +1,4 @@
+#include "app/crash_handler.h"
 #include "app/i18n.h"
 #include "app/session_log.h"
 #include "app/settings.h"
@@ -89,6 +90,9 @@ void startOfflineMatch()
 	g_ui.screen = toy::AppScreen::Match;
 	g_ui.selectedHand = 0;
 	g_ui.selectedTarget = 1;
+	g_ui.matchCounted = false;
+	g_ui.coachTipDismissed = false;
+	g_ui.timelineIndex = -1;
 	g_ui.lastMode = static_cast<int>(toy::LastMode::Offline);
 	g_ui.settingsDirty = true;
 	saveSettingsIfDirty();
@@ -175,6 +179,7 @@ void init()
 	sg_setup(&desc);
 
 	toy::sessionLogOpen();
+	toy::crashHandlerInstall();
 	toy::sessionLog("INFO", "app init");
 
 	toy::uiInit();
@@ -234,6 +239,7 @@ void frame()
 	}
 	if (g_ui.screen == toy::AppScreen::Match && g_match.phase == toy::Phase::GameOver) {
 		g_ui.screen = toy::AppScreen::Results;
+		g_ui.timelineIndex = g_match.log.empty() ? -1 : static_cast<int>(g_match.log.size()) - 1;
 		toy::sessionLogf("INFO", "game over winner=%d turns=%d", g_match.winner, g_match.turnNumber);
 	}
 
@@ -242,7 +248,9 @@ void frame()
 					  g_hasScene;
 
 	if (in3d) {
-		if (!g_dragging && g_ui.autoOrbit && !g_ui.showHowToPlay && !g_ui.pauseOpen) {
+		// P2 #36: reduced motion disables auto-orbit even if checkbox was on
+		const bool orbit = g_ui.autoOrbit && !g_ui.reducedMotion;
+		if (!g_dragging && orbit && !g_ui.showHowToPlay && !g_ui.pauseOpen) {
 			g_camera.tickIdle(static_cast<float>(dt), true);
 		}
 		g_scene.consumeImpulse(g_match);
@@ -324,7 +332,8 @@ void event(const sapp_event* e)
 				} else {
 					g_ui.pauseOpen = !g_ui.pauseOpen;
 				}
-			} else if (g_ui.screen == toy::AppScreen::Settings || g_ui.showHowToPlay) {
+			} else if (g_ui.screen == toy::AppScreen::Settings || g_ui.screen == toy::AppScreen::Credits ||
+					   g_ui.showHowToPlay) {
 				g_ui.showHowToPlay = false;
 				g_ui.screen = toy::AppScreen::Menu;
 			}

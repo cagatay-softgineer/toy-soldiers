@@ -13,6 +13,7 @@ enum class AppScreen : uint8_t {
 	Menu,
 	Settings,
 	HowToPlay,
+	Credits,
 	Lobby,   // host/client lobby or offline prep
 	Match,   // playing
 	Results, // game over
@@ -52,6 +53,14 @@ struct UiState {
 	int language = 0; // 0 EN 1 TR
 	int lastMode = 0; // LastMode
 
+	// P2
+	bool reducedMotion = false;
+	bool coachTips = true;
+	int matchesCompleted = 0;
+	int timelineIndex = -1; // scrubber into match.log (-1 = live/end)
+	bool showTimeline = true;
+	bool coachTipDismissed = false; // per-session; re-offer next match until 3 done
+
 	uint32_t lastToastSync = 0;
 	char toast[160] = {};
 	float toastTimer = 0.0f;
@@ -69,6 +78,7 @@ struct UiState {
 	bool settingsDirty = false;
 	bool wantFullscreenToggle = false; // consumed by main
 	bool wantApplyDisplay = false;
+	bool matchCounted = false; // results: count matchesCompleted once per game over
 };
 
 void uiInit();

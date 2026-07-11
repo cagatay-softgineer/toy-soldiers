@@ -30,6 +30,8 @@ public:
 	void step(float dt);
 	void syncFromMatch(const Match& match);
 	void consumeImpulse(Match& match);
+	// v0.7 #76: reset every soldier to its parade position (optional round-start ruleset).
+	void paradeRest(const Match& match);
 
 	b3WorldId world() const { return worldId_; }
 	const std::vector<BodyVisual>& visuals() const { return visuals_; }
@@ -39,6 +41,7 @@ public:
 	static b3Vec3 seatColor(int playerIndex);
 
 private:
+	void impulseSeat(int seat, float strength);
 	b3BodyId createStaticBox(b3Pos pos, float hx, float hy, float hz, b3Vec3 color, BodyVisual::Kind kind, int player);
 	b3BodyId createDynamicBox(b3Pos pos, float hx, float hy, float hz, float density, b3Vec3 color, BodyVisual::Kind kind,
 							  int player);

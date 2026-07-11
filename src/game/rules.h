@@ -9,6 +9,8 @@ struct Match; // defined in match.h
 // Pure rule helpers — no network, no rendering.
 
 bool isValidTarget(const Match& match, int actor, int target, const CardDef& card);
+// v0.7 #54/#72: true when both seats share a team in 2v2 mode.
+bool sameTeam(const Match& match, int a, int b);
 bool canPlayCard(const Match& match, int playerIndex, int handIndex, int targetPlayer);
 int computeAttackDamage(const Match& match, int actor, int target, const CardDef& card);
 

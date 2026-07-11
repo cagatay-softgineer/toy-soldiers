@@ -46,28 +46,34 @@ int pickLivingSeat(Match& m)
 	return seats[randRange(m.rng, 0, n - 1)];
 }
 
-// Weights per map for random rolls (relative ints).
-void eventWeights(MapId map, int& sand, int& rain, int& flood, int& cat)
+// Weights per map for random rolls (relative ints). v0.7 adds dog + blackout (#66, #67).
+void eventWeights(MapId map, int& sand, int& rain, int& flood, int& cat, int& dog, int& blackout)
 {
-	sand = rain = flood = cat = 0;
+	sand = rain = flood = cat = dog = blackout = 0;
 	switch (map) {
 	case MapId::LivingRoom:
-		cat = 50;
-		rain = 25;
+		cat = 40;
+		rain = 20;
+		dog = 15;
+		blackout = 10;
 		flood = 5;
 		sand = 5;
 		break;
 	case MapId::Desert:
-		sand = 55;
-		flood = 20;
+		sand = 50;
+		flood = 15;
+		blackout = 10;
 		rain = 5;
 		cat = 5;
+		dog = 5;
 		break;
 	case MapId::Backyard:
-		rain = 45;
-		flood = 30;
-		cat = 15;
+		rain = 35;
+		flood = 25;
+		dog = 20;
+		cat = 10;
 		sand = 5;
+		blackout = 5;
 		break;
 	default:
 		break;
@@ -76,9 +82,9 @@ void eventWeights(MapId map, int& sand, int& rain, int& flood, int& cat)
 
 EventKind rollEventKind(Match& m)
 {
-	int sand = 0, rain = 0, flood = 0, cat = 0;
-	eventWeights(m.config.mapId, sand, rain, flood, cat);
-	const int total = sand + rain + flood + cat;
+	int sand = 0, rain = 0, flood = 0, cat = 0, dog = 0, blackout = 0;
+	eventWeights(m.config.mapId, sand, rain, flood, cat, dog, blackout);
+	const int total = sand + rain + flood + cat + dog + blackout;
 	if (total <= 0) {
 		return EventKind::None;
 	}
@@ -92,7 +98,13 @@ EventKind rollEventKind(Match& m)
 	if ((r -= flood) < 0) {
 		return EventKind::Flood;
 	}
-	return EventKind::Cat;
+	if ((r -= cat) < 0) {
+		return EventKind::Cat;
+	}
+	if ((r -= dog) < 0) {
+		return EventKind::Dog;
+	}
+	return EventKind::Blackout;
 }
 
 void beginEvent(Match& m, EventKind kind, int focus)
@@ -150,6 +162,21 @@ void beginEvent(Match& m, EventKind kind, int focus)
 		std::snprintf(buf, sizeof(buf), "WORLD: A cat approaches the table… (watch %s)",
 					  focus >= 0 ? m.players[static_cast<size_t>(focus)].name : "someone");
 		pushWorld(m, focus, static_cast<int>(kind), buf);
+		break;
+	case EventKind::Dog:
+		// #66: one big table shake — every seat's soldiers get pushed inward. No HP.
+		m.world.remainingTurns = 1;
+		std::snprintf(buf, sizeof(buf), "WORLD: A dog bumps the table! Soldiers everywhere scatter.");
+		pushWorld(m, -1, static_cast<int>(kind), buf);
+		m.pendingPhysicsImpulse.targetPlayer = kImpulseAllSeats;
+		m.pendingPhysicsImpulse.strength = 2.8f;
+		m.pendingPhysicsImpulse.frames = 1;
+		break;
+	case EventKind::Blackout:
+		// #67: UI fog — enemy HP hidden for 1 turn. No gameplay change.
+		m.world.remainingTurns = 1;
+		std::snprintf(buf, sizeof(buf), "WORLD: Blackout! Enemy tower HP is hidden for 1 turn.");
+		pushWorld(m, -1, static_cast<int>(kind), buf);
 		break;
 	default:
 		m.world = {};
@@ -265,6 +292,11 @@ bool seatIsFlooded(const Match& match, int seat)
 	return match.world.kind == EventKind::Flood && match.world.remainingTurns > 0 && match.world.focusSeat == seat;
 }
 
+bool eventHidesHp(const Match& match)
+{
+	return match.world.kind == EventKind::Blackout && match.world.remainingTurns > 0;
+}
+
 void formatWorldEventStatus(const Match& match, char* out, int outCap)
 {
 	if (!out || outCap <= 0) {
@@ -299,6 +331,12 @@ void formatWorldEventStatus(const Match& match, char* out, int outCap)
 							  : "?",
 						  match.world.remainingTurns);
 		}
+		break;
+	case EventKind::Dog:
+		std::snprintf(out, outCap, "Dog bump (%d) — soldiers scattered, no HP damage", match.world.remainingTurns);
+		break;
+	case EventKind::Blackout:
+		std::snprintf(out, outCap, "Blackout (%d) — enemy tower HP hidden", match.world.remainingTurns);
 		break;
 	default:
 		std::snprintf(out, outCap, "Map: %s", mapName(match.config.mapId));

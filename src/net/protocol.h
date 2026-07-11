@@ -21,6 +21,7 @@ enum class MsgType : uint16_t {
 	Chat = 11,       // either: text
 	Goodbye = 12,
 	SetCosmetics = 13, // C→H / host local: plastic, tower skin, accessory
+	SetDeckMods = 14,  // v0.7 #47: ban 2 / add 2 sideboard defIds (lobby only)
 };
 
 #pragma pack(push, 1)
@@ -40,6 +41,7 @@ std::vector<uint8_t> makeMatchState(const std::vector<uint8_t>& snapshot);
 std::vector<uint8_t> makeReady(bool ready);
 std::vector<uint8_t> makeSetTower(TowerType t);
 std::vector<uint8_t> makeSetCosmetics(const Cosmetics& cos);
+std::vector<uint8_t> makeSetDeckMods(const int banned[2], const int extras[2]);
 std::vector<uint8_t> makePlayCard(int handIndex, int targetPlayer);
 std::vector<uint8_t> makeEndTurn();
 std::vector<uint8_t> makeReject(const char* reason);
@@ -53,6 +55,7 @@ bool readWelcome(const uint8_t* p, size_t n, int& seat);
 bool readReady(const uint8_t* p, size_t n, bool& ready);
 bool readSetTower(const uint8_t* p, size_t n, TowerType& t);
 bool readSetCosmetics(const uint8_t* p, size_t n, Cosmetics& cos);
+bool readSetDeckMods(const uint8_t* p, size_t n, int bannedOut[2], int extrasOut[2]);
 bool readPlayCard(const uint8_t* p, size_t n, int& handIndex, int& target);
 bool readString(const uint8_t* p, size_t n, std::string& out);
 

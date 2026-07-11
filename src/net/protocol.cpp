@@ -214,8 +214,34 @@ bool readSetTower(const uint8_t* p, size_t n, TowerType& t)
 	if (n < 1) {
 		return false;
 	}
+	if (p[0] >= static_cast<uint8_t>(TowerType::Count)) {
+		return false; // v0.7: 4 tower types, reject anything else
+	}
 	t = static_cast<TowerType>(p[0]);
 	return true;
+}
+
+std::vector<uint8_t> makeSetDeckMods(const int banned[2], const int extras[2])
+{
+	std::vector<uint8_t> out;
+	writeHeader(out, MsgType::SetDeckMods);
+	writeI32(out, banned[0]);
+	writeI32(out, banned[1]);
+	writeI32(out, extras[0]);
+	writeI32(out, extras[1]);
+	return out;
+}
+
+bool readSetDeckMods(const uint8_t* p, size_t n, int bannedOut[2], int extrasOut[2])
+{
+	bool ok = true;
+	const uint8_t* cur = p;
+	const uint8_t* end = p + n;
+	bannedOut[0] = readI32(cur, end, ok);
+	bannedOut[1] = readI32(cur, end, ok);
+	extrasOut[0] = readI32(cur, end, ok);
+	extrasOut[1] = readI32(cur, end, ok);
+	return ok;
 }
 
 bool readSetCosmetics(const uint8_t* p, size_t n, Cosmetics& cos)

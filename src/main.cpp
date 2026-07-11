@@ -31,6 +31,13 @@ float g_lastMouseX = 0.0f;
 float g_lastMouseY = 0.0f;
 bool g_hasScene = false;
 bool g_fullscreen = false;
+// v0.7 juice + timer state
+float g_turnTimerAccum = 0.0f;
+int g_lastTurnForTimer = -1;
+uint32_t g_lastFxSync = 0;
+float g_slowMoTimer = 0.0f;  // #74
+float g_punchTimer = 0.0f;   // #75
+int g_lastParadeTurn = -1;   // #76
 
 void rebuildScene()
 {
@@ -243,6 +250,45 @@ void frame()
 		toy::sessionLogf("INFO", "game over winner=%d turns=%d", g_match.winner, g_match.turnNumber);
 	}
 
+	// v0.7 #56: turn timer (authority enforces; client display approximates).
+	if (g_match.phase == toy::Phase::Playing && g_match.config.turnTimerSeconds > 0) {
+		if (g_lastTurnForTimer != g_match.turnNumber) {
+			g_lastTurnForTimer = g_match.turnNumber;
+			g_turnTimerAccum = 0.0f;
+		}
+		g_turnTimerAccum += static_cast<float>(dt);
+		g_ui.turnTimeLeft = static_cast<float>(g_match.config.turnTimerSeconds) - g_turnTimerAccum;
+		if (g_ui.turnTimeLeft <= 0.0f && g_session.mode() != toy::AppMode::Client) {
+			toy::sessionLogf("INFO", "turn timer expired — auto end turn %d", g_match.turnNumber);
+			toy::uiPushToast(g_ui, "Turn timer expired — turn skipped.", 2.2f);
+			g_session.hostForceEndTurn(g_match);
+			g_turnTimerAccum = 0.0f;
+		}
+	} else {
+		g_ui.turnTimeLeft = -1.0f;
+		g_lastTurnForTimer = g_match.turnNumber;
+		g_turnTimerAccum = 0.0f;
+	}
+
+	// v0.7 #74/#75: slow-mo on tower destroy, camera punch on big hits (off in reduced motion).
+	if (g_match.syncGeneration != g_lastFxSync) {
+		g_lastFxSync = g_match.syncGeneration;
+		if (!g_ui.reducedMotion) {
+			const int n = static_cast<int>(g_match.log.size());
+			for (int i = n - 1; i >= 0 && i >= n - 8; --i) {
+				const toy::MatchEvent& ev = g_match.log[static_cast<size_t>(i)];
+				if (ev.type == toy::MatchEvent::Type::TurnStart) {
+					break;
+				}
+				if (ev.type == toy::MatchEvent::Type::PlayerEliminated) {
+					g_slowMoTimer = 0.35f;
+				} else if (ev.type == toy::MatchEvent::Type::Damage && ev.value >= 5) {
+					g_punchTimer = 0.18f;
+				}
+			}
+		}
+	}
+
 	const bool in3d = (g_ui.screen == toy::AppScreen::Lobby || g_ui.screen == toy::AppScreen::Match ||
 					   g_ui.screen == toy::AppScreen::Results) &&
 					  g_hasScene;
@@ -253,10 +299,30 @@ void frame()
 		if (!g_dragging && orbit && !g_ui.showHowToPlay && !g_ui.pauseOpen) {
 			g_camera.tickIdle(static_cast<float>(dt), true);
 		}
+		// #76: optional parade rest at each round start.
+		if (g_match.config.paradeRest && g_match.phase == toy::Phase::Playing &&
+			g_match.turnNumber != g_lastParadeTurn &&
+			(g_match.turnNumber - 1) % g_match.config.playerCount == 0) {
+			g_lastParadeTurn = g_match.turnNumber;
+			g_scene.paradeRest(g_match);
+		}
 		g_scene.consumeImpulse(g_match);
-		g_scene.step(static_cast<float>(dt));
+		float stepDt = static_cast<float>(dt);
+		if (g_slowMoTimer > 0.0f) {
+			g_slowMoTimer -= static_cast<float>(dt);
+			stepDt *= 0.3f; // #74 slow-mo
+		}
+		g_scene.step(stepDt);
 		g_scene.syncFromMatch(g_match);
 	}
+
+	// #75: camera punch — temporary zoom-in restored after drawing.
+	float punchOffset = 0.0f;
+	if (g_punchTimer > 0.0f) {
+		g_punchTimer -= static_cast<float>(dt);
+		punchOffset = -0.22f * (g_punchTimer / 0.18f);
+	}
+	g_camera.distance += punchOffset;
 
 	float cr = 0.07f, cg = 0.09f, cb = 0.14f;
 	if (in3d) {
@@ -284,6 +350,7 @@ void frame()
 		sg_end_pass();
 	}
 	sg_commit();
+	g_camera.distance -= punchOffset; // restore after #75 punch
 
 	if (g_ui.settingsDirty && (g_ui.screen == toy::AppScreen::Menu || g_ui.screen == toy::AppScreen::Settings)) {
 		saveSettingsIfDirty();
@@ -333,7 +400,7 @@ void event(const sapp_event* e)
 					g_ui.pauseOpen = !g_ui.pauseOpen;
 				}
 			} else if (g_ui.screen == toy::AppScreen::Settings || g_ui.screen == toy::AppScreen::Credits ||
-					   g_ui.showHowToPlay) {
+					   g_ui.screen == toy::AppScreen::Codex || g_ui.showHowToPlay) {
 				g_ui.showHowToPlay = false;
 				g_ui.screen = toy::AppScreen::Menu;
 			}
@@ -365,7 +432,7 @@ void event(const sapp_event* e)
 					}
 				}
 			}
-		} else if (e->key_code >= SAPP_KEYCODE_1 && e->key_code <= SAPP_KEYCODE_5) {
+		} else if (e->key_code >= SAPP_KEYCODE_1 && e->key_code <= SAPP_KEYCODE_8) {
 			if (g_ui.screen != toy::AppScreen::Match) {
 				break;
 			}
@@ -414,7 +481,7 @@ sapp_desc sokol_main(int /*argc*/, char* /*argv*/[])
 	d.sample_count = 4;
 	d.fullscreen = hasSettings ? early.fullscreen : false;
 	d.swap_interval = (hasSettings && !early.vsync) ? 0 : 1;
-	d.window_title = "Oyuncak Asker Masa Savasi — v0.6 Solid Core";
+	d.window_title = "Oyuncak Asker Masa Savasi — v0.7 Deep Toybox";
 	d.logger.func = slog_func;
 	d.high_dpi = true;
 	return d;

@@ -8,12 +8,13 @@
 
 namespace toy {
 
-// v0.6 app shell screens
+// v0.6 app shell screens (+Codex in v0.7 #51)
 enum class AppScreen : uint8_t {
 	Menu,
 	Settings,
 	HowToPlay,
 	Credits,
+	Codex,   // offline card browser
 	Lobby,   // host/client lobby or offline prep
 	Match,   // playing
 	Results, // game over
@@ -36,6 +37,23 @@ struct UiState {
 	int plasticIndex = 0;
 	int towerSkinIndex = 0;
 	int accessoryIndex = 0;
+
+	// --- v0.7 match setup ---
+	int modeIndex = 0;       // GameMode
+	int aiLevelIndex = 1;    // AiLevel (default Normal)
+	int turnTimerIndex = 0;  // 0 off, 1=30s, 2=45s, 3=60s (#56)
+	bool freeTargeting = true; // #70 lobby toggle
+	bool paradeRest = false;   // #76
+	// Deck builder lite (#47): defIds, 0 = unused.
+	int banDef[2] = { 0, 0 };
+	int extraDef[2] = { 0, 0 };
+
+	// v0.7 HUD state
+	char lastCardBanner[120] = {}; // #49 public last-played card
+	float lastCardTimer = 0.0f;
+	uint32_t lastCardSync = 0;
+	bool showEventHistory = false; // #68
+	float turnTimeLeft = -1.0f;    // #56 display (set by main; <0 = off)
 
 	bool showHowToPlay = false;
 	bool autoOrbit = true;

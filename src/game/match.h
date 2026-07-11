@@ -33,9 +33,15 @@ struct Match {
 	// M3 world event system
 	WorldEventState world{};
 	int eventCooldown = 0; // turns until a new event may roll
+
+	// v0.7 #55 Hot Potato: current crown holder (-1 when mode inactive).
+	int crownSeat = -1;
 };
 
 void bumpSync(Match& match);
+
+// v0.7: clamp playerCount etc. to the selected mode (Quick Duel = 2 seats, team modes = 4).
+void applyModeToConfig(MatchConfig& config);
 
 // Prepare 4 empty lobby seats (host will claim seat 0).
 void initLobby(Match& match, const MatchConfig& config);

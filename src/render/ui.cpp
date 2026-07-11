@@ -149,15 +149,30 @@ void uiPushToast(UiState& ui, const char* text, float seconds)
 	ui.toastTimer = t;
 }
 
+int uiTurnTimerSeconds(int timerIndex)
+{
+	switch (timerIndex) {
+	case 1: return 30;
+	case 2: return 45;
+	case 3: return 60;
+	default: return 0;
+	}
+}
+
 MatchConfig uiMakeConfig(const UiState& ui, uint32_t seed)
 {
 	MatchConfig cfg;
 	cfg.playerCount = 4;
-	cfg.freeTargeting = true;
+	cfg.freeTargeting = ui.freeTargeting; // #70
 	cfg.fillEmptyWithAI = ui.fillAI;
 	cfg.eventsEnabled = ui.eventsEnabled;
 	cfg.mapId = static_cast<MapId>(ui.mapIndex);
 	cfg.seed = seed ? seed : 42u;
+	cfg.mode = static_cast<GameMode>(ui.modeIndex);
+	cfg.aiLevel = static_cast<AiLevel>(ui.aiLevelIndex);
+	cfg.turnTimerSeconds = uiTurnTimerSeconds(ui.turnTimerIndex);
+	cfg.paradeRest = ui.paradeRest;
+	applyModeToConfig(cfg);
 	return cfg;
 }
 
@@ -195,28 +210,40 @@ void applyTheme(const UiState& ui)
 	}
 }
 
-// Card keywords for tooltips (v0.6 P1 #10)
+// Card keywords for tooltips — driven by the v0.7 keyword flags (#42).
 void appendCardKeywords(const CardDef& def, char* out, int cap)
 {
 	out[0] = 0;
 	char tmp[128];
 	std::snprintf(tmp, sizeof(tmp), "[%s]", trKeyword(cardClassName(def.klass)));
 	std::strncat(out, tmp, static_cast<size_t>(cap - 1));
-	if (def.klass == CardClass::Defense) {
-		std::strncat(out, " · ", static_cast<size_t>(cap - std::strlen(out) - 1));
-		std::strncat(out, trKeyword("Shield"), static_cast<size_t>(cap - std::strlen(out) - 1));
+	struct KwName {
+		uint16_t bit;
+		const char* name;
+	};
+	const KwName kws[] = {
+		{ KwShield, "Shield" }, { KwPierce, "Pierce" },   { KwDraw, "Draw" }, { KwHeal, "Heal" },
+		{ KwAdjacentOnly, "AdjacentOnly" }, { KwAOE, "AOE" }, { KwEvent, "Event" },
+	};
+	for (const KwName& k : kws) {
+		if (def.keywords & k.bit) {
+			std::strncat(out, " · ", static_cast<size_t>(cap - std::strlen(out) - 1));
+			std::strncat(out, trKeyword(k.name), static_cast<size_t>(cap - std::strlen(out) - 1));
+		}
 	}
-	if (def.klass == CardClass::Attack && !def.freeTarget) {
-		std::strncat(out, " · ", static_cast<size_t>(cap - std::strlen(out) - 1));
-		std::strncat(out, trKeyword("AdjacentOnly"), static_cast<size_t>(cap - std::strlen(out) - 1));
+}
+
+// Rarity tint for card buttons (P2 #50 lite).
+ImVec4 rarityColor(Rarity r, bool selected)
+{
+	if (selected) {
+		return ImVec4(0.35f, 0.45f, 0.25f, 1.0f);
 	}
-	if (def.id == 20 || def.id == 21 || def.id == 22 || def.id == 23 || def.id == 12) {
-		std::strncat(out, " · ", static_cast<size_t>(cap - std::strlen(out) - 1));
-		std::strncat(out, trKeyword("Draw"), static_cast<size_t>(cap - std::strlen(out) - 1));
-	}
-	if (def.id == 21 || def.id == 25) {
-		std::strncat(out, " · ", static_cast<size_t>(cap - std::strlen(out) - 1));
-		std::strncat(out, trKeyword("Heal"), static_cast<size_t>(cap - std::strlen(out) - 1));
+	switch (r) {
+	case Rarity::Rare: return ImVec4(0.18f, 0.30f, 0.48f, 1.0f);
+	case Rarity::Epic: return ImVec4(0.35f, 0.22f, 0.48f, 1.0f);
+	case Rarity::Legendary: return ImVec4(0.50f, 0.38f, 0.10f, 1.0f);
+	default: return ImGui::GetStyle().Colors[ImGuiCol_Button];
 	}
 }
 
@@ -232,6 +259,22 @@ void drawToastsAndBanners(Match& match, UiState& ui)
 			const MatchEvent& last = match.log.back();
 			if (last.type == MatchEvent::Type::WorldEvent || last.type == MatchEvent::Type::Winner) {
 				uiPushToast(ui, last.text.c_str(), 3.2f);
+			}
+		}
+	}
+
+	// #49: public "last played card" banner.
+	if (match.syncGeneration != ui.lastCardSync) {
+		ui.lastCardSync = match.syncGeneration;
+		for (int i = static_cast<int>(match.log.size()) - 1; i >= 0; --i) {
+			const MatchEvent& e = match.log[static_cast<size_t>(i)];
+			if (e.type == MatchEvent::Type::TurnStart) {
+				break; // only a play from the current resolution
+			}
+			if (e.type == MatchEvent::Type::CardPlayed) {
+				std::snprintf(ui.lastCardBanner, sizeof(ui.lastCardBanner), "%s", e.text.c_str());
+				ui.lastCardTimer = ui.reducedMotion ? 1.0f : 2.0f;
+				break;
 			}
 		}
 	}
@@ -275,6 +318,20 @@ void drawToastsAndBanners(Match& match, UiState& ui)
 		}
 		ImGui::End();
 	}
+
+	// #49 last-played card, below the turn banner.
+	if (ui.lastCardTimer > 0.0f && match.phase == Phase::Playing) {
+		ui.lastCardTimer -= dt;
+		ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + 136.0f), ImGuiCond_Always,
+								ImVec2(0.5f, 0.0f));
+		ImGui::SetNextWindowBgAlpha(0.7f);
+		if (ImGui::Begin("##lastcard", nullptr,
+						 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoNav |
+							 ImGuiWindowFlags_NoInputs)) {
+			ImGui::TextColored(ImVec4(0.75f, 0.9f, 0.75f, 1.0f), "%s", ui.lastCardBanner);
+		}
+		ImGui::End();
+	}
 }
 
 void drawHowToPlaySteps(UiState& ui)
@@ -287,10 +344,11 @@ void drawHowToPlaySteps(UiState& ui)
 	ImGui::TextColored(ImVec4(0.96f, 0.77f, 0.36f, 1.0f), "%s", tr("app.title"));
 	ImGui::Separator();
 	ImGui::TextWrapped("1. Fantasy — Plastic toy soldiers on a table. Cards are orders.");
-	ImGui::TextWrapped("2. Goal — Destroy enemy main towers. Last tower standing wins.");
+	ImGui::TextWrapped("2. Goal — Destroy enemy main towers. Last tower standing wins (2v2: last team).");
 	ImGui::TextWrapped("3. Turn — Pick a target, pick one card, Play. Then turn passes.");
-	ImGui::TextWrapped("4. Shield / Scout — Shield halves damage. Scout +1 lasts until your next attack.");
-	ImGui::TextWrapped("5. World — Maps add props & events (sandstorm, rain, flood, cat). Cosmetics are fashion only.");
+	ImGui::TextWrapped("4. Shield / Scout — Shield halves damage (Pierce ignores it). Scout +1 lasts until your next attack.");
+	ImGui::TextWrapped("5. Towers — MG tank, Sniper +2, Shield Bearer starts shielded (-1 atk), Sapper +1 opener.");
+	ImGui::TextWrapped("6. World — Maps add events (sandstorm, rain, flood, cat, dog, blackout); Event cards cast your own. Cosmetics are fashion only.");
 	ImGui::Separator();
 	ImGui::TextUnformatted(tr("glossary.title"));
 	ImGui::BulletText("%s", tr("glossary.shield"));
@@ -314,13 +372,75 @@ void drawLoadoutEditors(Match& match, NetSession& session, UiState& ui, int seat
 		return;
 	}
 	Player& me = match.players[static_cast<size_t>(seat)];
+	// v0.7 #38: tower pick with stats comparison, #40 passive tooltips.
 	ImGui::TextUnformatted("Tower type (gameplay):");
-	if (ImGui::RadioButton("Machine Gun (36 HP)", me.tower == TowerType::MachineGun)) {
-		session.requestSetTower(match, TowerType::MachineGun);
+	if (ImGui::BeginTable("##towers", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_SizingStretchProp)) {
+		ImGui::TableSetupColumn("Tower");
+		ImGui::TableSetupColumn("HP");
+		ImGui::TableSetupColumn("Passive");
+		ImGui::TableHeadersRow();
+		for (int t = 0; t < static_cast<int>(TowerType::Count); ++t) {
+			const TowerType tt = static_cast<TowerType>(t);
+			ImGui::TableNextRow();
+			ImGui::TableNextColumn();
+			ImGui::PushID(t);
+			if (ImGui::RadioButton(towerTypeName(tt), me.tower == tt)) {
+				session.requestSetTower(match, tt);
+			}
+			if (ImGui::IsItemHovered()) {
+				ImGui::SetTooltip("%s", towerPassive(tt));
+			}
+			ImGui::PopID();
+			ImGui::TableNextColumn();
+			const int hp = (match.config.mode == GameMode::QuickDuel) ? 24 : towerBaseHp(tt);
+			ImGui::Text("%d", hp);
+			ImGui::TableNextColumn();
+			ImGui::TextWrapped("%s", towerPassive(tt));
+		}
+		ImGui::EndTable();
 	}
-	ImGui::SameLine();
-	if (ImGui::RadioButton("Sniper (34 HP +2 dmg)", me.tower == TowerType::Sniper)) {
-		session.requestSetTower(match, TowerType::Sniper);
+
+	// v0.7 #47: deck builder lite — ban 2 / add 2 from sideboard.
+	if (ImGui::TreeNode("Deck tweaks (ban 2 / add 2)")) {
+		const auto catalog = cardCatalog();
+		const int catN = static_cast<int>(catalog.size());
+		auto defCombo = [&](const char* label, int& defId) {
+			char preview[64];
+			const CardDef* cur = findCard(defId);
+			std::snprintf(preview, sizeof(preview), "%s", cur ? cur->name : "None");
+			bool changed = false;
+			if (ImGui::BeginCombo(label, preview)) {
+				if (ImGui::Selectable("None", defId == 0)) {
+					defId = 0;
+					changed = true;
+				}
+				for (int i = 0; i < catN; ++i) {
+					char item[96];
+					std::snprintf(item, sizeof(item), "%s [%s]", catalog[static_cast<size_t>(i)].name,
+								  cardClassName(catalog[static_cast<size_t>(i)].klass));
+					if (ImGui::Selectable(item, defId == catalog[static_cast<size_t>(i)].id)) {
+						defId = catalog[static_cast<size_t>(i)].id;
+						changed = true;
+					}
+				}
+				ImGui::EndCombo();
+			}
+			return changed;
+		};
+		int ban0 = me.bannedDefs[0], ban1 = me.bannedDefs[1];
+		int ex0 = me.extraDefs[0], ex1 = me.extraDefs[1];
+		bool modChanged = false;
+		modChanged |= defCombo("Ban 1", ban0);
+		modChanged |= defCombo("Ban 2", ban1);
+		modChanged |= defCombo("Add 1", ex0);
+		modChanged |= defCombo("Add 2", ex1);
+		ImGui::TextDisabled("Bans remove all copies; adds put one extra copy in. Max 2 Event cards per deck.");
+		if (modChanged) {
+			const int banned[2] = { ban0, ban1 };
+			const int extras[2] = { ex0, ex1 };
+			session.requestSetDeckMods(match, banned, extras);
+		}
+		ImGui::TreePop();
 	}
 
 	ImGui::Spacing();
@@ -361,77 +481,7 @@ void drawLoadoutEditors(Match& match, NetSession& session, UiState& ui, int seat
 	ImGui::ColorButton("##swatch", ImVec4(rgb.x, rgb.y, rgb.z, 1.0f), ImGuiColorEditFlags_NoTooltip, ImVec2(48, 24));
 }
 
-void drawMenu(UiState& ui)
-{
-	const ImGuiViewport* vp = ImGui::GetMainViewport();
-	ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.42f),
-							ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-	ImGui::SetNextWindowSize(ImVec2(420, 0), ImGuiCond_Always);
-	ImGui::Begin("Oyuncak Asker Masa Savasi", nullptr,
-				 ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize);
-
-	ImGui::TextColored(ImVec4(0.96f, 0.77f, 0.36f, 1.0f), "Toy Soldiers Tabletop");
-	ImGui::TextDisabled("v0.6 Solid Core  ·  protocol %u", static_cast<unsigned>(kProtocolVersion));
-	ImGui::Separator();
-
-	if (ImGui::Button("Play Offline (Hotseat)", ImVec2(-1, 40))) {
-		ui.screen = AppScreen::Lobby;
-		// offline lobby prep — main applies startOffline when leaving lobby via Start
-		ui.mapIndex = ui.mapIndex;
-	}
-	if (ImGui::Button("Host Lobby", ImVec2(-1, 40))) {
-		ui.screen = AppScreen::Lobby;
-		// flag via hostName path: we use a tiny mode hint in joinHost? better: use screen + pending
-		// Store intent: empty joinHost special? Use accessory of settings: we'll use pauseOpen false and
-		// hostPort path — main checks ui for "wantHost". Encode as mapIndex high bit? Cleaner: add field.
-	}
-	// Use hostName first char marker is ugly. Add explicit intent in UiState — already have screen Lobby.
-	// Differentiate host vs offline lobby with fillAI panel; Host button sets joinHost to ""
-	// Actually: use `ui.joinHost` sentinel or new field. Quick: set `ui.hostName` prefix.
-	// I'll set selectedHand = -1 for host intent, -2 for offline, -3 for join when entering lobby from menu.
-	// Better add ui.lobbyIntent: 0 offline 1 host 2 join - add to header... already pushed ui.h without it.
-	// Use: plasticIndex temporary? No.
-	// Use settingsDirty + string: if button Host, set joinHost to "@host"
-	if (false) {
-	}
-
-	ImGui::Spacing();
-	ImGui::InputText("Display name", ui.playerName, sizeof(ui.playerName));
-	ImGui::InputText("Join IP", ui.joinHost, sizeof(ui.joinHost));
-	ImGui::SetNextItemWidth(100);
-	ImGui::InputInt("Join port", &ui.joinPort);
-	ImGui::SameLine();
-	ImGui::SetNextItemWidth(100);
-	ImGui::InputInt("Host port", &ui.hostPort);
-
-	if (ImGui::Button("Join Host", ImVec2(-1, 36))) {
-		ui.screen = AppScreen::Lobby;
-		// main will call join when it sees Client transition — set marker in toast?
-		// We'll handle join immediately in menu by requiring main callbacks.
-		// For structure: set screen Lobby and ui.selectedTarget = -100 for join, -101 host, -102 offline.
-		ui.selectedTarget = -100; // join intent
-	}
-	// Re-do menu buttons with selectedTarget intents for main to consume
-	ImGui::Separator();
-	if (ImGui::Button("Settings", ImVec2(-1, 32))) {
-		ui.screen = AppScreen::Settings;
-	}
-	if (ImGui::Button("How to Play", ImVec2(-1, 32))) {
-		ui.showHowToPlay = true;
-	}
-	if (ImGui::Button("Quit", ImVec2(-1, 32))) {
-		sapp_request_quit();
-	}
-	ImGui::End();
-
-	// Overlay intent buttons clearly (replace broken block)
-	// The Play Offline / Host above need intents — rewrite menu end properly in second window? 
-	// Fix: re-issue intents at end of frame via static pending - main polls ui.selectedTarget
-}
-
-// Fix menu: rewrite cleanly with lobbyIntent field - add to ui via selectedHand abuse:
-// selectedHand: -1 menu idle, -2 offline, -3 host, -4 join after click until main clears.
-
+// Menu intents via selectedHand: -1 idle, -2 offline, -3 host, -4 join (main consumes).
 void drawMenuV2(UiState& ui)
 {
 	const ImGuiViewport* vp = ImGui::GetMainViewport();
@@ -442,10 +492,28 @@ void drawMenuV2(UiState& ui)
 				 ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize);
 
 	ImGui::TextColored(ImVec4(0.96f, 0.77f, 0.36f, 1.0f), "%s", tr("app.title"));
-	ImGui::TextDisabled("v0.6 Solid Core  ·  protocol %u", static_cast<unsigned>(kProtocolVersion));
+	ImGui::TextDisabled("v0.7 Deep Toybox  ·  protocol %u", static_cast<unsigned>(kProtocolVersion));
 	ImGui::Separator();
 
 	ImGui::InputText(tr("menu.display_name"), ui.playerName, sizeof(ui.playerName));
+
+	// v0.7 match setup: mode (#52-#57), AI level (#58), turn timer (#56), targeting (#70).
+	if (ImGui::CollapsingHeader(tr("menu.match_setup"), ImGuiTreeNodeFlags_DefaultOpen)) {
+		const char* modes[] = { gameModeName(GameMode::ClassicFFA), gameModeName(GameMode::QuickDuel),
+								gameModeName(GameMode::Teams2v2), gameModeName(GameMode::HotPotato),
+								gameModeName(GameMode::Sandbox) };
+		if (ImGui::Combo(tr("menu.mode"), &ui.modeIndex, modes, static_cast<int>(GameMode::Count))) {
+			ui.settingsDirty = true;
+		}
+		ImGui::TextDisabled("%s", gameModeBlurb(static_cast<GameMode>(ui.modeIndex)));
+		const char* aiLevels[] = { "Easy", "Normal", "Hard" };
+		ImGui::Combo(tr("menu.ai_level"), &ui.aiLevelIndex, aiLevels, 3);
+		const char* timers[] = { "Off", "30s", "45s", "60s" };
+		ImGui::Combo(tr("menu.turn_timer"), &ui.turnTimerIndex, timers, 4);
+		ImGui::Checkbox(tr("menu.free_targeting"), &ui.freeTargeting);
+		ImGui::Checkbox(tr("menu.parade_rest"), &ui.paradeRest);
+	}
+	ImGui::Separator();
 
 	if (ui.lastMode >= 1 && ui.lastMode <= 3) {
 		if (ImGui::Button(tr("menu.continue"), ImVec2(-1, 40))) {
@@ -493,6 +561,9 @@ void drawMenuV2(UiState& ui)
 	if (ImGui::Button(tr("menu.howto"), ImVec2(-1, 32))) {
 		ui.showHowToPlay = true;
 	}
+	if (ImGui::Button(tr("menu.codex"), ImVec2(-1, 32))) {
+		ui.screen = AppScreen::Codex;
+	}
 	if (ImGui::Button(tr("menu.credits"), ImVec2(-1, 32))) {
 		ui.screen = AppScreen::Credits;
 	}
@@ -511,7 +582,7 @@ void drawCredits(UiState& ui)
 	ImGui::Begin(tr("credits.title"), nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse);
 
 	ImGui::TextColored(ImVec4(0.96f, 0.77f, 0.36f, 1.0f), "%s", tr("app.title"));
-	ImGui::TextDisabled("v0.6 Solid Core");
+	ImGui::TextDisabled("v0.7 Deep Toybox");
 	ImGui::Separator();
 	ImGui::TextUnformatted("Game");
 	ImGui::BulletText("Design & code — preunec / cagatay-softgineer");
@@ -529,6 +600,60 @@ void drawCredits(UiState& ui)
 	ImGui::TextWrapped("Minidumps (if any): %%APPDATA%%/toy-soldiers/crashes/");
 	ImGui::TextDisabled("Protocol v%u · Default port %u", static_cast<unsigned>(kProtocolVersion),
 						static_cast<unsigned>(kDefaultPort));
+	if (ImGui::Button(tr("credits.back"), ImVec2(-1, 36))) {
+		ui.screen = AppScreen::Menu;
+	}
+	ImGui::End();
+}
+
+// v0.7 P2 #51: offline card codex browser.
+void drawCodex(UiState& ui)
+{
+	const ImGuiViewport* vp = ImGui::GetMainViewport();
+	ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.5f),
+							ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+	ImGui::SetNextWindowSize(ImVec2(680, vp->WorkSize.y * 0.85f), ImGuiCond_Always);
+	ImGui::Begin(tr("codex.title"), nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize);
+
+	ImGui::TextColored(ImVec4(0.96f, 0.77f, 0.36f, 1.0f), "%s", tr("codex.header"));
+	ImGui::TextDisabled("%d cards · keywords: Shield, Pierce, Draw, Heal, AdjacentOnly, AOE, Event",
+						static_cast<int>(cardCatalog().size()));
+	ImGui::Separator();
+
+	if (ImGui::BeginTable("##codex", 5,
+						  ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY |
+							  ImGuiTableFlags_SizingStretchProp,
+						  ImVec2(0, -44))) {
+		ImGui::TableSetupColumn("Card");
+		ImGui::TableSetupColumn("Class");
+		ImGui::TableSetupColumn("Rarity");
+		ImGui::TableSetupColumn("Keywords");
+		ImGui::TableSetupColumn("Effect");
+		ImGui::TableSetupScrollFreeze(0, 1);
+		ImGui::TableHeadersRow();
+		for (const CardDef& def : cardCatalog()) {
+			ImGui::TableNextRow();
+			ImGui::TableNextColumn();
+			const ImVec4 col = rarityColor(def.rarity, false);
+			if (def.rarity != Rarity::Common) {
+				ImGui::TextColored(ImVec4(col.x + 0.35f, col.y + 0.35f, col.z + 0.35f, 1.0f), "%s", def.name);
+			} else {
+				ImGui::TextUnformatted(def.name);
+			}
+			ImGui::TableNextColumn();
+			ImGui::TextUnformatted(trKeyword(cardClassName(def.klass)));
+			ImGui::TableNextColumn();
+			const char* rarities[] = { "Common", "Rare", "Epic", "Legendary" };
+			ImGui::TextUnformatted(rarities[static_cast<size_t>(def.rarity)]);
+			ImGui::TableNextColumn();
+			char kw[96];
+			appendCardKeywords(def, kw, sizeof(kw));
+			ImGui::TextUnformatted(kw);
+			ImGui::TableNextColumn();
+			ImGui::TextWrapped("%s", def.description);
+		}
+		ImGui::EndTable();
+	}
 	if (ImGui::Button(tr("credits.back"), ImVec2(-1, 36))) {
 		ui.screen = AppScreen::Menu;
 	}
@@ -751,6 +876,7 @@ void drawLobbyScreen(Match& match, NetSession& session, UiState& ui)
 	ImGui::Begin("Lobby", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse);
 
 	ImGui::Text("Mode: %s", modeName(session.mode()));
+	ImGui::Text("Game: %s — %s", gameModeName(match.config.mode), gameModeBlurb(match.config.mode));
 	ImGui::TextWrapped("Status: %s", session.status());
 	ImGui::Text("Protocol v%u · Seat %d · Sync %u", static_cast<unsigned>(kProtocolVersion), session.localSeat(),
 				match.syncGeneration);
@@ -777,6 +903,55 @@ void drawLobbyScreen(Match& match, NetSession& session, UiState& ui)
 		}
 		if (ImGui::Checkbox("World events", &ui.eventsEnabled)) {
 			match.config.eventsEnabled = ui.eventsEnabled;
+			if (session.mode() == AppMode::Host) {
+				session.hostPushState(match);
+			}
+		}
+		// v0.7: host-side game setup in lobby.
+		ui.modeIndex = static_cast<int>(match.config.mode);
+		const char* modes[] = { gameModeName(GameMode::ClassicFFA), gameModeName(GameMode::QuickDuel),
+								gameModeName(GameMode::Teams2v2), gameModeName(GameMode::HotPotato),
+								gameModeName(GameMode::Sandbox) };
+		if (ImGui::Combo(tr("menu.mode"), &ui.modeIndex, modes, static_cast<int>(GameMode::Count))) {
+			match.config.mode = static_cast<GameMode>(ui.modeIndex);
+			applyModeToConfig(match.config);
+			if (session.mode() == AppMode::Host) {
+				session.hostPushState(match);
+			}
+		}
+		ui.aiLevelIndex = static_cast<int>(match.config.aiLevel);
+		const char* aiLevels[] = { "Easy", "Normal", "Hard" };
+		if (ImGui::Combo(tr("menu.ai_level"), &ui.aiLevelIndex, aiLevels, 3)) {
+			match.config.aiLevel = static_cast<AiLevel>(ui.aiLevelIndex);
+			if (session.mode() == AppMode::Host) {
+				session.hostPushState(match);
+			}
+		}
+		// #70: targeting rule toggle.
+		bool freeT = match.config.freeTargeting;
+		if (ImGui::Checkbox(tr("menu.free_targeting"), &freeT)) {
+			match.config.freeTargeting = freeT;
+			ui.freeTargeting = freeT;
+			if (session.mode() == AppMode::Host) {
+				session.hostPushState(match);
+			}
+		}
+		int timerIdx = (match.config.turnTimerSeconds == 30)   ? 1
+					   : (match.config.turnTimerSeconds == 45) ? 2
+					   : (match.config.turnTimerSeconds == 60) ? 3
+															   : 0;
+		const char* timers[] = { "Off", "30s", "45s", "60s" };
+		if (ImGui::Combo(tr("menu.turn_timer"), &timerIdx, timers, 4)) {
+			match.config.turnTimerSeconds = uiTurnTimerSeconds(timerIdx);
+			ui.turnTimerIndex = timerIdx;
+			if (session.mode() == AppMode::Host) {
+				session.hostPushState(match);
+			}
+		}
+		bool parade = match.config.paradeRest;
+		if (ImGui::Checkbox(tr("menu.parade_rest"), &parade)) {
+			match.config.paradeRest = parade;
+			ui.paradeRest = parade;
 			if (session.mode() == AppMode::Host) {
 				session.hostPushState(match);
 			}
@@ -842,6 +1017,12 @@ void drawMatchHud(Match& match, NetSession& session, UiState& ui)
 
 	ImGui::Text("%s · %s · proto v%u", modeName(session.mode()), mapName(match.config.mapId),
 				static_cast<unsigned>(kProtocolVersion));
+	ImGui::Text("%s · AI %s", gameModeName(match.config.mode), aiLevelName(match.config.aiLevel));
+	if (match.config.turnTimerSeconds > 0 && ui.turnTimeLeft >= 0.0f && match.phase == Phase::Playing) {
+		const bool urgent = ui.turnTimeLeft < 6.0f;
+		ImGui::TextColored(urgent ? ImVec4(1.0f, 0.45f, 0.35f, 1.0f) : ImVec4(0.7f, 0.8f, 0.9f, 1.0f),
+						   "Turn timer: %.0fs", ui.turnTimeLeft);
+	}
 	ImGui::TextWrapped("%s", session.status());
 
 	char worldStatus[160];
@@ -881,12 +1062,40 @@ void drawMatchHud(Match& match, NetSession& session, UiState& ui)
 	if (ImGui::SmallButton("Help")) {
 		ui.showHowToPlay = true;
 	}
+	ImGui::SameLine();
+	if (ImGui::SmallButton(ui.showEventHistory ? "Hide events" : "Events")) {
+		ui.showEventHistory = !ui.showEventHistory; // #68
+	}
+
+	// Sandbox (#57): free event spawns for the authority side.
+	if (match.config.mode == GameMode::Sandbox && session.mode() != AppMode::Client &&
+		match.phase == Phase::Playing) {
+		ImGui::Separator();
+		ImGui::TextColored(ImVec4(0.96f, 0.77f, 0.36f, 1.0f), "Sandbox spawns");
+		const EventKind kinds[] = { EventKind::Sandstorm, EventKind::Rain,  EventKind::Flood, EventKind::Cat,
+									EventKind::Dog,       EventKind::Blackout, EventKind::None };
+		for (int k = 0; k < 7; ++k) {
+			if (k % 4 != 0) {
+				ImGui::SameLine();
+			}
+			const char* label = (kinds[k] == EventKind::None) ? "Clear" : eventKindName(kinds[k]);
+			if (ImGui::SmallButton(label)) {
+				forceWorldEvent(match, kinds[k]);
+				bumpSync(match);
+				if (session.mode() == AppMode::Host) {
+					session.hostPushState(match);
+				}
+			}
+		}
+	}
 	ImGui::End();
 
 	// Towers
 	ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x - 280, vp->WorkPos.y + 12), ImGuiCond_Always);
 	ImGui::SetNextWindowSize(ImVec2(268, 0), ImGuiCond_Always);
 	ImGui::Begin("Towers", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize);
+	const int localSeatForFog = (session.mode() == AppMode::Offline) ? match.activePlayer : session.localSeat();
+	const bool fogged = eventHidesHp(match); // #67 blackout
 	for (int i = 0; i < match.config.playerCount; ++i) {
 		const Player& p = match.players[static_cast<size_t>(i)];
 		const bool active = (i == match.activePlayer && match.phase == Phase::Playing);
@@ -903,18 +1112,67 @@ void drawMatchHud(Match& match, NetSession& session, UiState& ui)
 		} else {
 			ImGui::PushStyleColor(ImGuiCol_Text, seatCols[i % 4]);
 		}
-		ImGui::Text("%s%s%s", p.name, p.eliminated ? " [OUT]" : "", mine ? " (you)" : "");
+		char tags[48] = {};
+		if (match.config.mode == GameMode::Teams2v2 && p.team >= 0) {
+			std::strncat(tags, p.team == 0 ? " [A]" : " [B]", sizeof(tags) - std::strlen(tags) - 1);
+		}
+		if (match.config.mode == GameMode::HotPotato && match.crownSeat == i) {
+			std::strncat(tags, " [CROWN]", sizeof(tags) - std::strlen(tags) - 1);
+		}
+		ImGui::Text("%s%s%s%s", p.name, tags, p.eliminated ? " [OUT]" : "", mine ? " (you)" : "");
 		ImGui::PopStyleColor();
-		ImGui::ProgressBar(p.towerMaxHp > 0 ? static_cast<float>(p.towerHp) / static_cast<float>(p.towerMaxHp) : 0.f,
-						   ImVec2(-1, 0), nullptr);
-		ImGui::SameLine(0, 8);
-		ImGui::Text("%d/%d", p.towerHp, p.towerMaxHp);
+		const bool hideThis = fogged && i != localSeatForFog;
+		if (hideThis) {
+			ImGui::ProgressBar(1.0f, ImVec2(-1, 0), "??");
+			ImGui::SameLine(0, 8);
+			ImGui::TextDisabled("??/??");
+		} else {
+			ImGui::ProgressBar(p.towerMaxHp > 0 ? static_cast<float>(p.towerHp) / static_cast<float>(p.towerMaxHp)
+												: 0.f,
+							   ImVec2(-1, 0), nullptr);
+			ImGui::SameLine(0, 8);
+			ImGui::Text("%d/%d", p.towerHp, p.towerMaxHp);
+		}
 		if (p.shieldTurns > 0) {
 			ImGui::SameLine();
 			ImGui::TextColored(ImVec4(0.45f, 0.75f, 1.0f, 1.0f), "SHD %d", p.shieldTurns);
 		}
 	}
 	ImGui::End();
+
+	// #68: event history panel (world events only, latest first).
+	if (ui.showEventHistory) {
+		ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x - 360, vp->WorkPos.y + 12),
+								ImGuiCond_FirstUseEver);
+		ImGui::SetNextWindowSize(ImVec2(348, 200), ImGuiCond_FirstUseEver);
+		if (ImGui::Begin(tr("events.title"), &ui.showEventHistory)) {
+			int shown = 0;
+			for (int i = static_cast<int>(match.log.size()) - 1; i >= 0 && shown < 16; --i) {
+				const MatchEvent& ev = match.log[static_cast<size_t>(i)];
+				if (ev.type != MatchEvent::Type::WorldEvent) {
+					continue;
+				}
+				const char* icon = "[*]";
+				switch (static_cast<EventKind>(ev.value)) {
+				case EventKind::Sandstorm: icon = "[SAND]"; break;
+				case EventKind::Rain: icon = "[RAIN]"; break;
+				case EventKind::Flood: icon = "[FLOOD]"; break;
+				case EventKind::Cat: icon = "[CAT]"; break;
+				case EventKind::Dog: icon = "[DOG]"; break;
+				case EventKind::Blackout: icon = "[DARK]"; break;
+				default: break;
+				}
+				ImGui::TextColored(ImVec4(0.55f, 0.85f, 1.0f, 1.0f), "%s", icon);
+				ImGui::SameLine();
+				ImGui::TextWrapped("%s", ev.text.c_str());
+				++shown;
+			}
+			if (shown == 0) {
+				ImGui::TextDisabled("No world events yet.");
+			}
+		}
+		ImGui::End();
+	}
 
 	// Hand
 	if (match.phase == Phase::Playing) {
@@ -925,13 +1183,15 @@ void drawMatchHud(Match& match, NetSession& session, UiState& ui)
 			ImGui::SetNextWindowSize(ImVec2(vp->WorkSize.x - 24, 238), ImGuiCond_Always);
 			ImGui::Begin("Hand", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse);
 
-			// Auto-select first legal target (#21)
+			// Auto-select first legal target (#21) — skips teammates in 2v2 (#72).
 			if (ui.selectedTarget == handSeat || ui.selectedTarget < 0 ||
 				ui.selectedTarget >= match.config.playerCount ||
-				match.players[static_cast<size_t>(ui.selectedTarget)].eliminated) {
+				match.players[static_cast<size_t>(ui.selectedTarget)].eliminated ||
+				sameTeam(match, handSeat, ui.selectedTarget)) {
 				for (int t = 0; t < match.config.playerCount; ++t) {
 					if (t != handSeat && !match.players[static_cast<size_t>(t)].eliminated &&
-						match.players[static_cast<size_t>(t)].control != SeatControl::Empty) {
+						match.players[static_cast<size_t>(t)].control != SeatControl::Empty &&
+						!sameTeam(match, handSeat, t)) {
 						ui.selectedTarget = t;
 						break;
 					}
@@ -939,6 +1199,13 @@ void drawMatchHud(Match& match, NetSession& session, UiState& ui)
 			}
 
 			ImGui::Text("Target:");
+			const bool fogTargets = eventHidesHp(match);
+			const CardDef* selDef =
+				(ui.selectedHand >= 0 && ui.selectedHand < static_cast<int>(hp.hand.size()))
+					? findCard(hp.hand[static_cast<size_t>(ui.selectedHand)].defId)
+					: nullptr;
+			const bool singleTargetAttack =
+				selDef && selDef->klass == CardClass::Attack && !(selDef->keywords & KwAOE);
 			for (int t = 0; t < match.config.playerCount; ++t) {
 				if (t == handSeat) {
 					continue;
@@ -947,12 +1214,28 @@ void drawMatchHud(Match& match, NetSession& session, UiState& ui)
 				if (tp.eliminated || tp.control == SeatControl::Empty) {
 					continue;
 				}
+				if (sameTeam(match, handSeat, t)) {
+					continue; // #72: teammates are not targets
+				}
+				// #71: range indicator — grey out targets the selected attack cannot reach.
+				const bool inRange = !singleTargetAttack || handSeat != match.activePlayer ||
+									 canPlayCard(match, match.activePlayer, ui.selectedHand, t);
 				ImGui::SameLine();
 				char label[48];
-				std::snprintf(label, sizeof(label), "%s (%d)%s##tgt", tp.name, tp.towerHp,
-							  tp.shieldTurns > 0 ? " shd" : "");
+				if (fogTargets) {
+					std::snprintf(label, sizeof(label), "%s (??)%s##tgt", tp.name, tp.shieldTurns > 0 ? " shd" : "");
+				} else {
+					std::snprintf(label, sizeof(label), "%s (%d)%s##tgt", tp.name, tp.towerHp,
+								  tp.shieldTurns > 0 ? " shd" : "");
+				}
+				if (!inRange) {
+					ImGui::BeginDisabled();
+				}
 				if (ImGui::RadioButton(label, ui.selectedTarget == t)) {
 					ui.selectedTarget = t;
+				}
+				if (!inRange) {
+					ImGui::EndDisabled();
 				}
 			}
 
@@ -968,11 +1251,14 @@ void drawMatchHud(Match& match, NetSession& session, UiState& ui)
 				}
 				ImGui::PushID(h);
 				const bool selected = (ui.selectedHand == h);
-				if (selected) {
-					ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.35f, 0.45f, 0.25f, 1.0f));
-				}
+				// v0.7 P2 #50 lite: rarity tint (selection wins).
+				ImGui::PushStyleColor(ImGuiCol_Button, rarityColor(def->rarity, selected));
 				char btn[128];
-				if (def->klass == CardClass::Attack) {
+				if (def->klass == CardClass::Attack && (def->keywords & KwAOE)) {
+					std::snprintf(btn, sizeof(btn), "[%s] %s\nhits both neighbors", cardClassName(def->klass),
+								  def->name);
+				} else if (def->klass == CardClass::Attack && ui.selectedTarget >= 0 &&
+						   ui.selectedTarget < match.config.playerCount) {
 					const int preview = computeAttackDamage(match, match.activePlayer, ui.selectedTarget, *def);
 					std::snprintf(btn, sizeof(btn), "[%s] %s\n~%d dmg", cardClassName(def->klass), def->name, preview);
 				} else {
@@ -991,9 +1277,7 @@ void drawMatchHud(Match& match, NetSession& session, UiState& ui)
 					ImGui::TextWrapped("%s", def->description);
 					ImGui::EndTooltip();
 				}
-				if (selected) {
-					ImGui::PopStyleColor();
-				}
+				ImGui::PopStyleColor();
 				ImGui::SameLine();
 				ImGui::PopID();
 			}
@@ -1238,6 +1522,9 @@ void uiDraw(Match& match, NetSession& session, UiState& ui)
 		break;
 	case AppScreen::Credits:
 		drawCredits(ui);
+		break;
+	case AppScreen::Codex:
+		drawCodex(ui);
 		break;
 	case AppScreen::Lobby:
 		drawLobbyScreen(match, session, ui);

@@ -17,6 +17,12 @@ int eventModifyAttackDamage(const Match& match, int baseDamage);
 // Flooded seat helper.
 bool seatIsFlooded(const Match& match, int seat);
 
+// Blackout (#67): true while enemy HP should be hidden in the UI.
+bool eventHidesHp(const Match& match);
+
+// Dog (#66): pendingPhysicsImpulse.targetPlayer sentinel meaning "all seats".
+constexpr int kImpulseAllSeats = -2;
+
 // Human-readable status line for HUD.
 void formatWorldEventStatus(const Match& match, char* out, int outCap);
 

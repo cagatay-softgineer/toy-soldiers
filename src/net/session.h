@@ -48,10 +48,14 @@ public:
 	bool requestReady(Match& match, bool ready);
 	bool requestSetTower(Match& match, TowerType t);
 	bool requestSetCosmetics(Match& match, const Cosmetics& cos);
+	// v0.7 #47: deck builder lite (lobby only).
+	bool requestSetDeckMods(Match& match, const int banned[2], const int extras[2]);
 
 	// Host only.
 	bool hostStartMatch(Match& match);
 	bool hostRematch(Match& match);
+	// v0.7 #56: authority-side auto-skip when the turn timer expires (any seat).
+	bool hostForceEndTurn(Match& match);
 	// Push current match/lobby snapshot to all clients (map pick, etc.).
 	void hostPushState(Match& match);
 

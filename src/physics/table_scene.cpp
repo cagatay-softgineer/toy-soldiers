@@ -267,14 +267,26 @@ void TableScene::consumeImpulse(Match& match)
 	match.pendingPhysicsImpulse.frames = 0;
 	match.pendingPhysicsImpulse.targetPlayer = -1;
 
-	if (target < 0 || target >= match.config.playerCount) {
+	// Dog event (#66): every seat's soldiers get shoved.
+	if (target == kImpulseAllSeats) {
+		for (int i = 0; i < match.config.playerCount; ++i) {
+			impulseSeat(i, strength);
+		}
 		return;
 	}
 
-	const b3Vec3 seat = seatPosition(target);
-	const b3Vec3 inward = b3Normalize({ -seat.x, 0.0f, -seat.z });
+	if (target < 0 || target >= match.config.playerCount) {
+		return;
+	}
+	impulseSeat(target, strength);
+}
+
+void TableScene::impulseSeat(int seat, float strength)
+{
+	const b3Vec3 seatPos = seatPosition(seat);
+	const b3Vec3 inward = b3Normalize({ -seatPos.x, 0.0f, -seatPos.z });
 	for (int s = 0; s < kSoldiersPerPlayer; ++s) {
-		const b3BodyId body = soldierBodies_[static_cast<size_t>(target)][static_cast<size_t>(s)];
+		const b3BodyId body = soldierBodies_[static_cast<size_t>(seat)][static_cast<size_t>(s)];
 		if (!b3Body_IsValid(body)) {
 			continue;
 		}
@@ -285,6 +297,35 @@ void TableScene::consumeImpulse(Match& match)
 		};
 		b3Body_ApplyLinearImpulseToCenter(body, impulse, true);
 		b3Body_ApplyAngularImpulse(body, { 0.02f * strength, 0.05f * strength, -0.02f * strength }, true);
+	}
+}
+
+void TableScene::paradeRest(const Match& match)
+{
+	// #76 (optional ruleset): stand fallen soldiers back at attention each round.
+	if (!alive_) {
+		return;
+	}
+	const float tableHalf = 1.6f;
+	for (int i = 0; i < match.config.playerCount; ++i) {
+		const b3Vec3 seat = seatPosition(i, tableHalf);
+		const b3Vec3 inward = b3Normalize({ -seat.x, 0.0f, -seat.z });
+		const b3Vec3 sideAxis = b3Normalize(b3Cross({ 0.0f, 1.0f, 0.0f }, inward));
+		for (int s = 0; s < kSoldiersPerPlayer; ++s) {
+			const b3BodyId body = soldierBodies_[static_cast<size_t>(i)][static_cast<size_t>(s)];
+			if (!b3Body_IsValid(body)) {
+				continue;
+			}
+			const float side = (s - 1.5f) * 0.14f;
+			const b3Pos pos = {
+				seat.x + inward.x * 0.35f + sideAxis.x * side,
+				0.09f,
+				seat.z + inward.z * 0.35f + sideAxis.z * side,
+			};
+			b3Body_SetTransform(body, pos, b3Quat_identity);
+			b3Body_SetLinearVelocity(body, { 0.0f, 0.0f, 0.0f });
+			b3Body_SetAngularVelocity(body, { 0.0f, 0.0f, 0.0f });
+		}
 	}
 }
 

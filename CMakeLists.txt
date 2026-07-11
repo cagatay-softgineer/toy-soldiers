@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 project(toy_soldiers
-	VERSION 0.1.0
+	VERSION 0.7.0
 	DESCRIPTION "Oyuncak Asker Masa Savasi — Box3D game jam prototype"
 	LANGUAGES C CXX
 )
@@ -170,6 +170,12 @@ add_executable(toy_balance_report src/balance_report_main.cpp)
 target_link_libraries(toy_balance_report PRIVATE toy_game)
 if(MSVC)
 	set_property(TARGET toy_balance_report PROPERTY VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+endif()
+
+add_executable(toy_mode_test src/mode_test_main.cpp)
+target_link_libraries(toy_mode_test PRIVATE toy_game)
+if(MSVC)
+	set_property(TARGET toy_mode_test PROPERTY VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
 endif()
 
 add_executable(toy_golden_seed_test src/game/golden_seed_test_main.cpp)

@@ -125,6 +125,15 @@ void writePlayer(Writer& w, const Player& p)
 	w.u8(static_cast<uint8_t>(p.cosmetics.plastic));
 	w.u8(static_cast<uint8_t>(p.cosmetics.towerSkin));
 	w.u8(static_cast<uint8_t>(p.cosmetics.accessory));
+	// v0.7
+	w.i32(p.team);
+	w.u8(p.firstAttackDone ? 1 : 0);
+	w.u8(p.skipNextTurn ? 1 : 0);
+	w.u8(static_cast<uint8_t>(p.persona));
+	w.i32(p.bannedDefs[0]);
+	w.i32(p.bannedDefs[1]);
+	w.i32(p.extraDefs[0]);
+	w.i32(p.extraDefs[1]);
 	w.cards(p.hand);
 	w.cards(p.deck);
 	w.cards(p.discard);
@@ -150,6 +159,14 @@ bool readPlayer(Reader& r, Player& p)
 	p.cosmetics.plastic = static_cast<PlasticColor>(r.u8());
 	p.cosmetics.towerSkin = static_cast<TowerSkin>(r.u8());
 	p.cosmetics.accessory = static_cast<Accessory>(r.u8());
+	p.team = r.i32();
+	p.firstAttackDone = r.u8() != 0;
+	p.skipNextTurn = r.u8() != 0;
+	p.persona = static_cast<AiPersona>(r.u8());
+	p.bannedDefs[0] = r.i32();
+	p.bannedDefs[1] = r.i32();
+	p.extraDefs[0] = r.i32();
+	p.extraDefs[1] = r.i32();
 	r.cards(p.hand);
 	r.cards(p.deck);
 	r.cards(p.discard);
@@ -190,6 +207,11 @@ std::vector<uint8_t> serializeMatch(const Match& match)
 	w.u8(match.config.fillEmptyWithAI ? 1 : 0);
 	w.u8(static_cast<uint8_t>(match.config.mapId));
 	w.u8(match.config.eventsEnabled ? 1 : 0);
+	// v0.7 config
+	w.u8(static_cast<uint8_t>(match.config.mode));
+	w.u8(static_cast<uint8_t>(match.config.aiLevel));
+	w.i32(match.config.turnTimerSeconds);
+	w.u8(match.config.paradeRest ? 1 : 0);
 
 	// World event (M3)
 	w.u8(static_cast<uint8_t>(match.world.kind));
@@ -197,6 +219,8 @@ std::vector<uint8_t> serializeMatch(const Match& match)
 	w.i32(match.world.focusSeat);
 	w.u8(match.world.warning ? 1 : 0);
 	w.i32(match.eventCooldown);
+	// v0.7 Hot Potato
+	w.i32(match.crownSeat);
 
 	for (int i = 0; i < kMaxPlayers; ++i) {
 		writePlayer(w, match.players[static_cast<size_t>(i)]);
@@ -256,12 +280,17 @@ bool deserializeMatch(Match& match, const uint8_t* data, size_t size)
 	m.config.fillEmptyWithAI = r.u8() != 0;
 	m.config.mapId = static_cast<MapId>(r.u8());
 	m.config.eventsEnabled = r.u8() != 0;
+	m.config.mode = static_cast<GameMode>(r.u8());
+	m.config.aiLevel = static_cast<AiLevel>(r.u8());
+	m.config.turnTimerSeconds = r.i32();
+	m.config.paradeRest = r.u8() != 0;
 
 	m.world.kind = static_cast<EventKind>(r.u8());
 	m.world.remainingTurns = r.i32();
 	m.world.focusSeat = r.i32();
 	m.world.warning = r.u8() != 0;
 	m.eventCooldown = r.i32();
+	m.crownSeat = r.i32();
 
 	for (int i = 0; i < kMaxPlayers; ++i) {
 		if (!readPlayer(r, m.players[static_cast<size_t>(i)])) {

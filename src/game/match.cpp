@@ -37,16 +37,34 @@ void dealSoldiers(Match& match, Player& p)
 	}
 }
 
-void applyTowerStats(Player& p)
+void applyTowerStats(Player& p, GameMode mode)
 {
-	// M5: MG tank vs Sniper (+2 dmg) — close HP so snipers aren't free focus.
-	p.towerMaxHp = (p.tower == TowerType::MachineGun) ? 36 : 34;
+	// v0.7: per-tower base stats; Quick Duel flattens HP to 24 (#53).
+	p.towerMaxHp = (mode == GameMode::QuickDuel) ? 24 : towerBaseHp(p.tower);
 	p.towerHp = p.towerMaxHp;
-	p.shieldTurns = 0;
+	// Shield Bearer (#37) opens with one shield turn.
+	p.shieldTurns = (p.tower == TowerType::ShieldBearer) ? 1 : 0;
 	p.attackBonusNext = 0;
+	p.firstAttackDone = false;
+	p.skipNextTurn = false;
 	p.eliminated = false;
 	p.hand.clear();
 	p.discard.clear();
+}
+
+int pickOccupiedSeat(Match& match)
+{
+	int seats[kMaxPlayers];
+	int n = 0;
+	for (int i = 0; i < match.config.playerCount; ++i) {
+		if (match.players[static_cast<size_t>(i)].control != SeatControl::Empty) {
+			seats[n++] = i;
+		}
+	}
+	if (n <= 0) {
+		return -1;
+	}
+	return seats[randRange(match.rng, 0, n - 1)];
 }
 
 } // namespace
@@ -56,10 +74,29 @@ void bumpSync(Match& match)
 	++match.syncGeneration;
 }
 
+void applyModeToConfig(MatchConfig& config)
+{
+	switch (config.mode) {
+	case GameMode::QuickDuel:
+		config.playerCount = 2;
+		break;
+	case GameMode::Teams2v2:
+	case GameMode::HotPotato:
+		config.playerCount = 4;
+		break;
+	default:
+		if (config.playerCount < 2 || config.playerCount > kMaxPlayers) {
+			config.playerCount = 4;
+		}
+		break;
+	}
+}
+
 void initLobby(Match& match, const MatchConfig& config)
 {
 	match = Match{};
 	match.config = config;
+	applyModeToConfig(match.config);
 	if (match.config.playerCount < 2) {
 		match.config.playerCount = 2;
 	}
@@ -79,17 +116,19 @@ void initLobby(Match& match, const MatchConfig& config)
 		p.ready = false;
 		p.tower = (i % 2 == 0) ? TowerType::MachineGun : TowerType::Sniper;
 		p.cosmetics = defaultCosmeticsForSeat(i);
-		applyTowerStats(p);
+		applyTowerStats(p, match.config.mode);
 	}
 	char buf[128];
-	std::snprintf(buf, sizeof(buf), "Lobby open — map: %s. Host seat 0; clients join.",
-				  mapName(match.config.mapId));
+	std::snprintf(buf, sizeof(buf), "Lobby open — %s on %s. Host seat 0; clients join.",
+				  gameModeName(match.config.mode), mapName(match.config.mapId));
 	pushInfo(match, buf);
 	bumpSync(match);
 }
 
 void startMatchFromLobby(Match& match)
 {
+	applyModeToConfig(match.config);
+
 	// Fill empties with AI if requested.
 	int humans = 0;
 	for (int i = 0; i < match.config.playerCount; ++i) {
@@ -123,6 +162,7 @@ void startMatchFromLobby(Match& match)
 	match.phase = Phase::Playing;
 	++match.matchId;
 	match.pendingPhysicsImpulse = {};
+	match.crownSeat = -1;
 	resetWorldEvents(match);
 
 	for (int i = 0; i < match.config.playerCount; ++i) {
@@ -131,10 +171,29 @@ void startMatchFromLobby(Match& match)
 			// Seat unused beyond playerCount — leave empty.
 			continue;
 		}
-		applyTowerStats(p);
-		p.deck = makeStarterDeck(i, match.rng, match.nextInstanceId);
+		applyTowerStats(p, match.config.mode);
+		// Teams2v2 (#54): 0&2 vs 1&3.
+		p.team = (match.config.mode == GameMode::Teams2v2) ? (i % 2) : -1;
+		// AI personalities (#59) — deterministic from match rng.
+		if (p.control == SeatControl::AI) {
+			p.persona = static_cast<AiPersona>(randRange(match.rng, 1, 3)); // Aggro/Turtle/Chaos
+		} else {
+			p.persona = AiPersona::Balanced;
+		}
+		p.deck = makeStarterDeck(i, match.rng, match.nextInstanceId, match.config.mode, p);
 		dealSoldiers(match, p);
 		// drawCards needs Playing phase + valid player — call after phase set
+	}
+
+	// Hot Potato (#55): crown lands on a random occupied seat.
+	if (match.config.mode == GameMode::HotPotato) {
+		match.crownSeat = pickOccupiedSeat(match);
+		if (match.crownSeat >= 0) {
+			char cbuf[96];
+			std::snprintf(cbuf, sizeof(cbuf), "The crown lands on %s — they take +1 damage!",
+						  match.players[static_cast<size_t>(match.crownSeat)].name);
+			pushInfo(match, cbuf);
+		}
 	}
 
 	// Draw opening hands
@@ -147,8 +206,8 @@ void startMatchFromLobby(Match& match)
 	}
 
 	char buf[128];
-	std::snprintf(buf, sizeof(buf), "Match #%u on %s — %s to play.", match.matchId,
-				  mapName(match.config.mapId), match.players[0].name);
+	std::snprintf(buf, sizeof(buf), "Match #%u — %s on %s — %s to play.", match.matchId,
+				  gameModeName(match.config.mode), mapName(match.config.mapId), match.players[0].name);
 	MatchEvent e;
 	e.type = MatchEvent::Type::TurnStart;
 	e.actor = 0;
@@ -185,73 +244,212 @@ void resetMatch(Match& match)
 	startMatch(match, cfg);
 }
 
+namespace {
+
+struct AiCandidate {
+	int hand = -1;
+	int target = -1;
+	int score = -9999;
+	CardClass klass = CardClass::Tactic;
+	int estDamage = 0;
+};
+
+// Persona weight shifts (#59).
+int personaAdjust(AiPersona persona, CardClass klass, uint32_t& rng)
+{
+	int adj = 0;
+	switch (persona) {
+	case AiPersona::Aggro:
+		adj += (klass == CardClass::Attack) ? 4 : -2;
+		break;
+	case AiPersona::Turtle:
+		adj += (klass == CardClass::Defense) ? 6 : (klass == CardClass::Attack ? -2 : 0);
+		break;
+	case AiPersona::Chaos:
+		adj += randRange(rng, 0, 14);
+		break;
+	default:
+		break;
+	}
+	return adj;
+}
+
+// Collect every legal play for the active seat.
+void collectCandidates(Match& match, std::vector<AiCandidate>& out)
+{
+	const int actor = match.activePlayer;
+	const Player& p = match.players[static_cast<size_t>(actor)];
+	for (int h = 0; h < static_cast<int>(p.hand.size()); ++h) {
+		const CardDef* def = findCard(p.hand[static_cast<size_t>(h)].defId);
+		if (!def) {
+			continue;
+		}
+		if (def->klass == CardClass::Attack && !(def->keywords & KwAOE)) {
+			for (int t = 0; t < match.config.playerCount; ++t) {
+				if (canPlayCard(match, actor, h, t)) {
+					AiCandidate c;
+					c.hand = h;
+					c.target = t;
+					c.klass = def->klass;
+					c.estDamage = computeAttackDamage(match, actor, t, *def);
+					out.push_back(c);
+				}
+			}
+		} else if (canPlayCard(match, actor, h, actor)) {
+			AiCandidate c;
+			c.hand = h;
+			c.target = actor;
+			c.klass = def->klass;
+			if (def->keywords & KwAOE) {
+				const int n = match.config.playerCount;
+				const int nb[2] = { (actor + 1) % n, (actor + n - 1) % n };
+				for (int k = 0; k < 2; ++k) {
+					const int t = nb[k];
+					if ((k == 1 && t == nb[0]) || t == actor) {
+						continue;
+					}
+					const Player& tp = match.players[static_cast<size_t>(t)];
+					if (tp.eliminated || tp.control == SeatControl::Empty || sameTeam(match, actor, t)) {
+						continue;
+					}
+					c.estDamage += computeAttackDamage(match, actor, t, *def);
+				}
+			}
+			out.push_back(c);
+		}
+	}
+}
+
+// AI flavor lines (#60) — only for AI seats, kept sparse.
+void aiFlavorLine(Match& match, int actor, CardClass klass)
+{
+	if (match.players[static_cast<size_t>(actor)].control != SeatControl::AI) {
+		return;
+	}
+	const char* name = match.players[static_cast<size_t>(actor)].name;
+	char buf[96];
+	if (klass == CardClass::Defense) {
+		std::snprintf(buf, sizeof(buf), "%s digs in.", name);
+	} else if (klass == CardClass::Event) {
+		std::snprintf(buf, sizeof(buf), "%s stirs up the table!", name);
+	} else {
+		return;
+	}
+	MatchEvent e;
+	e.type = MatchEvent::Type::Info;
+	e.actor = actor;
+	e.text = buf;
+	match.log.push_back(std::move(e));
+}
+
+int scoreCandidate(Match& match, const AiCandidate& c, AiLevel level, AiPersona persona)
+{
+	const int actor = match.activePlayer;
+	const Player& p = match.players[static_cast<size_t>(actor)];
+	const CardDef* def = findCard(p.hand[static_cast<size_t>(c.hand)].defId);
+	if (!def) {
+		return -9999;
+	}
+	int score = 0;
+	if (def->klass == CardClass::Attack) {
+		if (def->id == 26) {
+			// Magnet Hand: only worth it against a shield.
+			const Player& tp = match.players[static_cast<size_t>(c.target)];
+			score = (tp.shieldTurns > 0) ? 12 : -20;
+		} else if (def->keywords & KwAOE) {
+			score = c.estDamage * 6 + randRange(match.rng, 0, 8);
+		} else {
+			const Player& tp = match.players[static_cast<size_t>(c.target)];
+			score = c.estDamage * 6 - tp.towerHp / 3 + randRange(match.rng, 0, level == AiLevel::Hard ? 4 : 12);
+			if (tp.shieldTurns > 0 && !(def->keywords & KwPierce)) {
+				score -= 5; // prefer unshielded
+			}
+			if (tp.towerHp <= 8) {
+				score += 6;
+			}
+			// Hard (#58): lookahead-1 — a lethal hit dominates everything.
+			if (level == AiLevel::Hard && c.estDamage >= tp.towerHp && match.config.mode != GameMode::Sandbox) {
+				score += 1000;
+			}
+		}
+	} else if (def->klass == CardClass::Event) {
+		score = 3 + randRange(match.rng, 0, 6);
+	} else if (def->id == 27) {
+		// Line Cutter: worth more the healthier the next player is.
+		score = 5 + randRange(match.rng, 0, 4);
+	} else {
+		// Defense / tactics.
+		score = (def->klass == CardClass::Defense) ? 6 : 4;
+		if (p.towerHp * 2 < p.towerMaxHp) {
+			score += (def->klass == CardClass::Defense) ? 8 : 0;
+		}
+		if (static_cast<int>(p.hand.size()) <= 2 && def->klass == CardClass::Tactic) {
+			score += 5;
+		}
+		if (level == AiLevel::Hard && (def->keywords & KwHeal) && p.towerHp >= p.towerMaxHp - 1) {
+			score -= 10; // don't heal at full
+		}
+		score += randRange(match.rng, 0, 4);
+	}
+	score += personaAdjust(persona, def->klass, match.rng);
+	return score;
+}
+
+} // namespace
+
 bool autoPlayBest(Match& match)
 {
 	if (match.phase != Phase::Playing) {
 		return false;
 	}
 	const int actor = match.activePlayer;
-	Player& p = match.players[static_cast<size_t>(actor)];
+	const Player& p = match.players[static_cast<size_t>(actor)];
+	const AiLevel level = match.config.aiLevel;
+	const AiPersona persona = p.persona;
 
-	int bestHand = -1;
-	int bestTarget = -1;
-	int bestScore = -9999;
+	std::vector<AiCandidate> candidates;
+	candidates.reserve(24);
+	collectCandidates(match, candidates);
 
-	for (int h = 0; h < static_cast<int>(p.hand.size()); ++h) {
-		const CardDef* def = findCard(p.hand[static_cast<size_t>(h)].defId);
-		if (!def) {
-			continue;
-		}
-		if (def->klass == CardClass::Attack) {
-			for (int t = 0; t < match.config.playerCount; ++t) {
-				if (!canPlayCard(match, actor, h, t)) {
-					continue;
-				}
-				const int dmg = computeAttackDamage(match, actor, t, *def);
-				const Player& tp = match.players[static_cast<size_t>(t)];
-				// M5: diversify focus — soft HP weight + noise (no tower-type bias).
-				int score = dmg * 6 - tp.towerHp / 3 + randRange(match.rng, 0, 12);
-				if (tp.shieldTurns > 0) {
-					score -= 5; // prefer unshielded
-				}
-				// Finish low targets without hard-locking one seat forever.
-				if (tp.towerHp <= 8) {
-					score += 6;
-				}
-				if (score > bestScore) {
-					bestScore = score;
-					bestHand = h;
-					bestTarget = t;
-				}
-			}
-		} else if (canPlayCard(match, actor, h, actor)) {
-			// Prefer defense when low, tactics when hand small.
-			int score = (def->klass == CardClass::Defense) ? 6 : 4;
-			if (p.towerHp * 2 < p.towerMaxHp) {
-				score += (def->klass == CardClass::Defense) ? 8 : 0;
-			}
-			if (static_cast<int>(p.hand.size()) <= 2 && def->klass == CardClass::Tactic) {
-				score += 5;
-			}
-			score += randRange(match.rng, 0, 4);
-			if (score > bestScore) {
-				bestScore = score;
-				bestHand = h;
-				bestTarget = actor;
-			}
-		}
-	}
-
-	if (bestHand < 0) {
+	if (candidates.empty()) {
+		// #61: never softlock — always end the turn.
 		endTurn(match);
 		bumpSync(match);
 		return true;
 	}
-	const bool ok = applyCardPlay(match, bestHand, bestTarget);
-	if (ok) {
-		bumpSync(match);
+
+	int pick = -1;
+	if (level == AiLevel::Easy) {
+		// #58 Easy: any random legal play.
+		pick = randRange(match.rng, 0, static_cast<int>(candidates.size()) - 1);
+	} else {
+		int bestScore = -9999;
+		for (int i = 0; i < static_cast<int>(candidates.size()); ++i) {
+			const int s = scoreCandidate(match, candidates[static_cast<size_t>(i)], level, persona);
+			if (s > bestScore) {
+				bestScore = s;
+				pick = i;
+			}
+		}
 	}
-	return ok;
+	if (pick < 0) {
+		endTurn(match);
+		bumpSync(match);
+		return true;
+	}
+
+	const AiCandidate chosen = candidates[static_cast<size_t>(pick)];
+	const CardClass klass = chosen.klass;
+	const bool ok = applyCardPlay(match, chosen.hand, chosen.target);
+	if (ok) {
+		aiFlavorLine(match, actor, klass);
+		bumpSync(match);
+		return true;
+	}
+	// Defensive fallback (#61): a rejected AI play must not stall the match.
+	endTurn(match);
+	bumpSync(match);
+	return true;
 }
 
 bool autoPlayIfAITurn(Match& match)

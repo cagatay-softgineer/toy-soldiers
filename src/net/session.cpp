@@ -355,6 +355,42 @@ bool NetSession::requestSetCosmetics(Match& match, const Cosmetics& cos)
 	return true;
 }
 
+bool NetSession::requestSetDeckMods(Match& match, const int banned[2], const int extras[2])
+{
+	if (match.phase != Phase::Lobby) {
+		return false;
+	}
+	if (mode_ == AppMode::Client) {
+		clientSendQ_.enqueue(net::FrameCodec::pack(net::makeSetDeckMods(banned, extras)));
+		return true;
+	}
+	if (localSeat_ >= 0) {
+		Player& p = match.players[static_cast<size_t>(localSeat_)];
+		p.bannedDefs[0] = banned[0];
+		p.bannedDefs[1] = banned[1];
+		p.extraDefs[0] = extras[0];
+		p.extraDefs[1] = extras[1];
+		bumpSync(match);
+		if (mode_ == AppMode::Host) {
+			broadcastSnapshot(match);
+		}
+	}
+	return true;
+}
+
+bool NetSession::hostForceEndTurn(Match& match)
+{
+	if (mode_ == AppMode::Client || match.phase != Phase::Playing) {
+		return false;
+	}
+	endTurn(match);
+	bumpSync(match);
+	if (mode_ == AppMode::Host) {
+		broadcastSnapshot(match);
+	}
+	return true;
+}
+
 bool NetSession::hostStartMatch(Match& match)
 {
 	if (mode_ != AppMode::Host || match.phase != Phase::Lobby) {
@@ -503,6 +539,24 @@ void NetSession::hostOnClientMessage(Match& match, ClientSlot& c, const std::vec
 		match.players[static_cast<size_t>(c.seat)].cosmetics = cos;
 		bumpSync(match);
 		sceneNeedsRebuild_ = true;
+		broadcastSnapshot(match);
+		break;
+	}
+	case net::MsgType::SetDeckMods: {
+		int banned[2] = { 0, 0 };
+		int extras[2] = { 0, 0 };
+		if (c.seat < 0 || !net::readSetDeckMods(payload, payloadSize, banned, extras)) {
+			return;
+		}
+		if (match.phase != Phase::Lobby) {
+			return;
+		}
+		Player& p = match.players[static_cast<size_t>(c.seat)];
+		p.bannedDefs[0] = banned[0];
+		p.bannedDefs[1] = banned[1];
+		p.extraDefs[0] = extras[0];
+		p.extraDefs[1] = extras[1];
+		bumpSync(match);
 		broadcastSnapshot(match);
 		break;
 	}

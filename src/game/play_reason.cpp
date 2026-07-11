@@ -35,7 +35,7 @@ const char* describeIllegalPlay(const Match& match, int playerIndex, int handInd
 	if (!def) {
 		return "Unknown card.";
 	}
-	if (def->klass == CardClass::Attack) {
+	if (def->klass == CardClass::Attack && !(def->keywords & KwAOE)) {
 		if (targetPlayer < 0 || targetPlayer >= match.config.playerCount) {
 			return "Pick a valid target tower.";
 		}
@@ -48,7 +48,10 @@ const char* describeIllegalPlay(const Match& match, int playerIndex, int handInd
 		if (match.players[static_cast<size_t>(targetPlayer)].control == SeatControl::Empty) {
 			return "Target seat is empty.";
 		}
-		if (eventForcesAdjacent(match) || !match.config.freeTargeting) {
+		if (sameTeam(match, playerIndex, targetPlayer)) {
+			return "Cannot target your teammate.";
+		}
+		if (eventForcesAdjacent(match) || !match.config.freeTargeting || (def->keywords & KwAdjacentOnly)) {
 			const int diff = targetPlayer > playerIndex ? targetPlayer - playerIndex : playerIndex - targetPlayer;
 			const int wrap = match.config.playerCount - 1;
 			if (!(diff == 1 || diff == wrap)) {

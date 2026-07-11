@@ -21,11 +21,13 @@ namespace {
 
 toy::Match g_match;
 toy::NetSession g_session;
+toy::LanDiscovery g_discovery; // v0.8 #85/#86
 toy::TableScene g_scene;
 toy::Draw3D g_draw;
 toy::Camera g_camera;
 toy::UiState g_ui;
 toy::Settings g_settings;
+bool g_recordedRecentHost = false; // v0.8 #110
 bool g_dragging = false;
 float g_lastMouseX = 0.0f;
 float g_lastMouseY = 0.0f;
@@ -81,6 +83,7 @@ void goMenu()
 	g_ui.selectedHand = 0;
 	g_ui.pauseOpen = false;
 	g_ui.leaveConfirmOpen = false;
+	g_ui.rematchVoteSent = false;
 	saveSettingsIfDirty();
 }
 
@@ -128,6 +131,7 @@ void startHostLobby()
 void startJoin()
 {
 	toy::sessionLogf("INFO", "join %s:%d", g_ui.joinHost, g_ui.joinPort);
+	g_recordedRecentHost = false;
 	if (!g_session.joinLobby(g_match, g_ui.joinHost, static_cast<uint16_t>(g_ui.joinPort), g_ui.playerName)) {
 		toy::uiPushToast(g_ui, g_session.status(), 3.0f);
 		toy::sessionLogf("ERROR", "join failed: %s", g_session.status());
@@ -139,6 +143,25 @@ void startJoin()
 	g_ui.lastMode = static_cast<int>(toy::LastMode::Join);
 	g_ui.settingsDirty = true;
 	saveSettingsIfDirty();
+}
+
+// v0.8 #86: resolve a typed room code against live LAN beacons, then join.
+void startJoinByCode()
+{
+	g_discovery.update();
+	const toy::net::BeaconInfo* b = g_discovery.findByCode(g_ui.roomCodeInput);
+	if (!b) {
+		toy::uiPushToast(g_ui, "Room code not found on LAN — is the host on the same network?", 3.2f);
+		toy::sessionLogf("WARN", "room code %s not found", g_ui.roomCodeInput);
+		return;
+	}
+	if (b->version != toy::kProtocolVersion) {
+		toy::uiPushToast(g_ui, "That host runs a different game version — update both sides.", 3.2f);
+		return;
+	}
+	std::snprintf(g_ui.joinHost, sizeof(g_ui.joinHost), "%s", b->fromIp);
+	g_ui.joinPort = b->tcpPort;
+	startJoin();
 }
 
 void processUiIntents()
@@ -163,6 +186,9 @@ void processUiIntents()
 		break;
 	case -6:
 		goMenu();
+		break;
+	case -7:
+		startJoinByCode();
 		break;
 	default:
 		break;
@@ -225,7 +251,36 @@ void frame()
 		saveSettingsIfDirty();
 	}
 
+	// v0.8 #85: LAN browser runs only while on the menu.
+	if (g_ui.screen == toy::AppScreen::Menu) {
+		if (!g_discovery.active()) {
+			g_discovery.start();
+		}
+		g_discovery.update();
+	} else if (g_discovery.active()) {
+		g_discovery.stop();
+	}
+
 	g_session.update(g_match);
+
+	// v0.8 #98: connection died (timeout / kick / version mismatch) → back to menu with reason.
+	if (g_session.connectionLost()) {
+		toy::uiPushToast(g_ui, g_session.connectionLostReason(), 3.5f);
+		toy::sessionLogf("WARN", "connection lost: %s", g_session.connectionLostReason());
+		g_session.clearConnectionLost();
+		goMenu();
+	}
+
+	// v0.8 #110: remember a successfully joined host once per join.
+	if (g_session.mode() == toy::AppMode::Client && g_session.isConnected() && !g_recordedRecentHost) {
+		g_recordedRecentHost = true;
+		const char* hostName = g_match.players[0].name[0] ? g_match.players[0].name : g_ui.joinHost;
+		toy::settingsAddRecentHost(g_settings, hostName, g_ui.joinHost, g_ui.joinPort);
+		for (int i = 0; i < toy::Settings::kRecentHostMax; ++i) {
+			std::snprintf(g_ui.recentHosts[i], sizeof(g_ui.recentHosts[i]), "%s", g_settings.recentHosts[i]);
+		}
+		toy::settingsSave(g_settings);
+	}
 
 	// Client soft-fail toast from rejects (also handled in UI)
 	if (g_session.lastError()[0] && g_ui.screen != toy::AppScreen::Match) {
@@ -345,7 +400,7 @@ void frame()
 		pass.swapchain = sglue_swapchain();
 		sg_begin_pass(&pass);
 		toy::uiBeginFrame(w, h, dt);
-		toy::uiDraw(g_match, g_session, g_ui);
+		toy::uiDraw(g_match, g_session, g_discovery, g_ui);
 		toy::uiEndFrame();
 		sg_end_pass();
 	}
@@ -457,6 +512,7 @@ void cleanup()
 	saveSettingsIfDirty();
 	toy::sessionLog("INFO", "app cleanup");
 	toy::sessionLogClose();
+	g_discovery.stop();
 	g_session.shutdown(&g_match);
 	destroyScene();
 	toy::uiShutdown();
@@ -481,7 +537,7 @@ sapp_desc sokol_main(int /*argc*/, char* /*argv*/[])
 	d.sample_count = 4;
 	d.fullscreen = hasSettings ? early.fullscreen : false;
 	d.swap_interval = (hasSettings && !early.vsync) ? 0 : 1;
-	d.window_title = "Oyuncak Asker Masa Savasi — v0.7 Deep Toybox";
+	d.window_title = "Oyuncak Asker Masa Savasi — v0.8 Reliable Party";
 	d.logger.func = slog_func;
 	d.high_dpi = true;
 	return d;

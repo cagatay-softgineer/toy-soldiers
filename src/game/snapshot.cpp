@@ -221,6 +221,8 @@ std::vector<uint8_t> serializeMatch(const Match& match)
 	w.i32(match.eventCooldown);
 	// v0.7 Hot Potato
 	w.i32(match.crownSeat);
+	// v0.8
+	w.u8(match.lobbyLocked ? 1 : 0);
 
 	for (int i = 0; i < kMaxPlayers; ++i) {
 		writePlayer(w, match.players[static_cast<size_t>(i)]);
@@ -291,6 +293,7 @@ bool deserializeMatch(Match& match, const uint8_t* data, size_t size)
 	m.world.warning = r.u8() != 0;
 	m.eventCooldown = r.i32();
 	m.crownSeat = r.i32();
+	m.lobbyLocked = r.u8() != 0;
 
 	for (int i = 0; i < kMaxPlayers; ++i) {
 		if (!readPlayer(r, m.players[static_cast<size_t>(i)])) {

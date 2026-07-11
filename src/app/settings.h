@@ -44,7 +44,14 @@ struct Settings {
 	bool reducedMotion = false;   // shorter toasts, no auto-orbit
 	bool coachTips = true;        // tips for first N completed matches
 	int matchesCompleted = 0;     // local counter for coach tips
+
+	// v0.8 #86/#110: recent hosts ("name|ip|port"), most recent first.
+	static constexpr int kRecentHostMax = 5;
+	char recentHosts[kRecentHostMax][96] = {};
 };
+
+// v0.8: push a host to the top of the recent list (dedup by ip+port).
+void settingsAddRecentHost(Settings& s, const char* name, const char* ip, int port);
 
 bool settingsLoad(Settings& out);
 bool settingsSave(const Settings& s);

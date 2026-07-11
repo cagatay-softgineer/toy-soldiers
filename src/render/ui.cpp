@@ -14,6 +14,7 @@
 #include "sokol_imgui.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 namespace toy {
@@ -96,6 +97,9 @@ void uiApplySettings(UiState& ui, const Settings& s)
 	ui.reducedMotion = s.reducedMotion;
 	ui.coachTips = s.coachTips;
 	ui.matchesCompleted = s.matchesCompleted;
+	for (int i = 0; i < Settings::kRecentHostMax; ++i) {
+		std::snprintf(ui.recentHosts[i], sizeof(ui.recentHosts[i]), "%s", s.recentHosts[i]);
+	}
 	if (ui.reducedMotion) {
 		ui.autoOrbit = false;
 	}
@@ -130,6 +134,9 @@ void uiCaptureSettings(const UiState& ui, Settings& s)
 	s.reducedMotion = ui.reducedMotion;
 	s.coachTips = ui.coachTips;
 	s.matchesCompleted = ui.matchesCompleted;
+	for (int i = 0; i < Settings::kRecentHostMax; ++i) {
+		std::snprintf(s.recentHosts[i], sizeof(s.recentHosts[i]), "%s", ui.recentHosts[i]);
+	}
 }
 
 void uiPushToast(UiState& ui, const char* text, float seconds)
@@ -481,8 +488,9 @@ void drawLoadoutEditors(Match& match, NetSession& session, UiState& ui, int seat
 	ImGui::ColorButton("##swatch", ImVec4(rgb.x, rgb.y, rgb.z, 1.0f), ImGuiColorEditFlags_NoTooltip, ImVec2(48, 24));
 }
 
-// Menu intents via selectedHand: -1 idle, -2 offline, -3 host, -4 join (main consumes).
-void drawMenuV2(UiState& ui)
+// Menu intents via selectedHand: -1 idle, -2 offline, -3 host, -4 join,
+// -7 join-by-room-code (main consumes).
+void drawMenuV2(LanDiscovery& discovery, UiState& ui)
 {
 	const ImGuiViewport* vp = ImGui::GetMainViewport();
 	ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.42f),
@@ -492,7 +500,7 @@ void drawMenuV2(UiState& ui)
 				 ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize);
 
 	ImGui::TextColored(ImVec4(0.96f, 0.77f, 0.36f, 1.0f), "%s", tr("app.title"));
-	ImGui::TextDisabled("v0.7 Deep Toybox  ·  protocol %u", static_cast<unsigned>(kProtocolVersion));
+	ImGui::TextDisabled("v0.8 Reliable Party  ·  protocol %u", static_cast<unsigned>(kProtocolVersion));
 	ImGui::Separator();
 
 	ImGui::InputText(tr("menu.display_name"), ui.playerName, sizeof(ui.playerName));
@@ -540,13 +548,101 @@ void drawMenuV2(UiState& ui)
 	}
 
 	ImGui::Separator();
-	ImGui::InputText(tr("menu.join_ip"), ui.joinHost, sizeof(ui.joinHost));
+	// v0.8 #86: join by room code (LAN beacon lookup happens in main).
+	ImGui::TextColored(ImVec4(0.96f, 0.77f, 0.36f, 1.0f), "%s", tr("menu.join_lan"));
 	ImGui::SetNextItemWidth(120);
-	ImGui::InputInt("Port##join", &ui.joinPort);
-	if (ImGui::Button(tr("menu.join"), ImVec2(-1, 36))) {
-		ui.selectedHand = -4;
+	ImGui::InputText(tr("menu.room_code"), ui.roomCodeInput, sizeof(ui.roomCodeInput),
+					 ImGuiInputTextFlags_CharsUppercase | ImGuiInputTextFlags_CharsNoBlank);
+	ImGui::SameLine();
+	if (ImGui::Button(tr("menu.join_code"), ImVec2(-1, 0))) {
+		ui.selectedHand = -7;
 		ui.lastMode = static_cast<int>(LastMode::Join);
 		ui.settingsDirty = true;
+	}
+
+	// #85: live LAN lobby list from UDP beacons.
+	const auto& found = discovery.entries();
+	if (found.empty()) {
+		ImGui::TextDisabled("%s", tr("menu.lan_scanning"));
+	} else {
+		for (size_t i = 0; i < found.size(); ++i) {
+			const net::BeaconInfo& b = found[i].info;
+			char label[160];
+			std::snprintf(label, sizeof(label), "%s  [%s]  %s:%u  %u/%u%s##lan%d", b.hostName, b.code, b.fromIp,
+						  static_cast<unsigned>(b.tcpPort), b.seatsTaken, b.seatsTotal,
+						  b.version != kProtocolVersion ? "  (version mismatch)" : "", static_cast<int>(i));
+			const bool incompatible = b.version != kProtocolVersion;
+			if (incompatible) {
+				ImGui::BeginDisabled();
+			}
+			if (ImGui::Button(label, ImVec2(-1, 28))) {
+				std::snprintf(ui.joinHost, sizeof(ui.joinHost), "%s", b.fromIp);
+				ui.joinPort = b.tcpPort;
+				ui.selectedHand = -4;
+				ui.lastMode = static_cast<int>(LastMode::Join);
+				ui.settingsDirty = true;
+			}
+			if (incompatible) {
+				ImGui::EndDisabled();
+			}
+		}
+	}
+
+	// #110: recent hosts ("name|ip|port").
+	bool anyRecent = false;
+	for (const auto& rh : ui.recentHosts) {
+		if (rh[0]) {
+			anyRecent = true;
+			break;
+		}
+	}
+	if (anyRecent && ImGui::TreeNode(tr("menu.recent_hosts"))) {
+		for (int i = 0; i < 5; ++i) {
+			if (!ui.recentHosts[i][0]) {
+				continue;
+			}
+			char name[64] = {}, ip[64] = {};
+			int port = kDefaultPort;
+			char tmp[96];
+			std::snprintf(tmp, sizeof(tmp), "%s", ui.recentHosts[i]);
+			char* p1 = std::strchr(tmp, '|');
+			if (p1) {
+				*p1 = 0;
+				char* p2 = std::strchr(p1 + 1, '|');
+				if (p2) {
+					*p2 = 0;
+					std::snprintf(name, sizeof(name), "%s", tmp);
+					std::snprintf(ip, sizeof(ip), "%s", p1 + 1);
+					port = std::atoi(p2 + 1);
+				}
+			}
+			if (!ip[0]) {
+				continue;
+			}
+			char label[128];
+			std::snprintf(label, sizeof(label), "%s — %s:%d##recent%d", name, ip, port, i);
+			if (ImGui::SmallButton(label)) {
+				std::snprintf(ui.joinHost, sizeof(ui.joinHost), "%s", ip);
+				ui.joinPort = port;
+				ui.selectedHand = -4;
+				ui.lastMode = static_cast<int>(LastMode::Join);
+				ui.settingsDirty = true;
+			}
+		}
+		ImGui::TreePop();
+	}
+
+	// #87: manual IP tucked behind an advanced collapse.
+	if (ImGui::TreeNode(tr("menu.manual_ip"))) {
+		ImGui::InputText(tr("menu.join_ip"), ui.joinHost, sizeof(ui.joinHost));
+		ImGui::SetNextItemWidth(120);
+		ImGui::InputInt("Port##join", &ui.joinPort);
+		if (ImGui::Button(tr("menu.join"), ImVec2(-1, 32))) {
+			ui.selectedHand = -4;
+			ui.lastMode = static_cast<int>(LastMode::Join);
+			ui.settingsDirty = true;
+		}
+		ImGui::TreePop();
 	}
 
 	ImGui::Separator();
@@ -582,7 +678,7 @@ void drawCredits(UiState& ui)
 	ImGui::Begin(tr("credits.title"), nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse);
 
 	ImGui::TextColored(ImVec4(0.96f, 0.77f, 0.36f, 1.0f), "%s", tr("app.title"));
-	ImGui::TextDisabled("v0.7 Deep Toybox");
+	ImGui::TextDisabled("v0.8 Reliable Party");
 	ImGui::Separator();
 	ImGui::TextUnformatted("Game");
 	ImGui::BulletText("Design & code — preunec / cagatay-softgineer");
@@ -881,12 +977,89 @@ void drawLobbyScreen(Match& match, NetSession& session, UiState& ui)
 	ImGui::Text("Protocol v%u · Seat %d · Sync %u", static_cast<unsigned>(kProtocolVersion), session.localSeat(),
 				match.syncGeneration);
 
+	// v0.8 #82/#85: room code + copy join info (host only).
+	if (session.mode() == AppMode::Host && session.roomCode()[0]) {
+		ImGui::TextColored(ImVec4(0.96f, 0.77f, 0.36f, 1.0f), "Room code: %s  (port %u)", session.roomCode(),
+						   static_cast<unsigned>(session.listenPort()));
+		ImGui::SameLine();
+		if (ImGui::SmallButton(tr("lobby.copy"))) {
+			char clip[96];
+			std::snprintf(clip, sizeof(clip), "Room %s — port %u", session.roomCode(),
+						  static_cast<unsigned>(session.listenPort()));
+			ImGui::SetClipboardText(clip);
+		}
+	}
+	// #83: client-side connection freshness.
+	if (session.mode() == AppMode::Client) {
+		const float age = session.hostPacketAge();
+		if (age >= 0.0f) {
+			const bool stale = age > 3.0f;
+			ImGui::TextColored(stale ? ImVec4(1.0f, 0.5f, 0.4f, 1.0f) : ImVec4(0.5f, 0.8f, 0.5f, 1.0f),
+							   "Last host packet: %.1fs ago", age);
+		}
+	}
+
 	ImGui::Separator();
-	ImGui::TextUnformatted("Seats");
-	for (int i = 0; i < match.config.playerCount; ++i) {
-		const Player& p = match.players[static_cast<size_t>(i)];
-		ImGui::Text("Seat %d: %-12s [%s] %s  %s", i, p.name[0] ? p.name : "(empty)", seatControlName(p.control),
-					p.ready ? "READY" : "...", towerTypeName(p.tower));
+	// v0.8 #78: seat cards with ready checkmarks (+ping/kick for host, #79/#83).
+	const bool amHost = session.mode() == AppMode::Host;
+	const int seatCols = amHost ? 6 : 5;
+	if (ImGui::BeginTable("##seats", seatCols, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+		ImGui::TableSetupColumn("Seat", ImGuiTableColumnFlags_WidthFixed, 40.0f);
+		ImGui::TableSetupColumn("Name");
+		ImGui::TableSetupColumn("Control", ImGuiTableColumnFlags_WidthFixed, 62.0f);
+		ImGui::TableSetupColumn("Tower");
+		ImGui::TableSetupColumn("Ready", ImGuiTableColumnFlags_WidthFixed, 48.0f);
+		if (amHost) {
+			ImGui::TableSetupColumn("Ping", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+		}
+		ImGui::TableHeadersRow();
+		for (int i = 0; i < match.config.playerCount; ++i) {
+			const Player& p = match.players[static_cast<size_t>(i)];
+			ImGui::TableNextRow();
+			ImGui::TableNextColumn();
+			ImGui::Text("%d%s", i, i == session.localSeat() ? "*" : "");
+			ImGui::TableNextColumn();
+			ImGui::TextUnformatted(p.control == SeatControl::Empty ? "(empty)" : p.name);
+			ImGui::TableNextColumn();
+			ImGui::TextUnformatted(seatControlName(p.control));
+			ImGui::TableNextColumn();
+			ImGui::TextUnformatted(p.control == SeatControl::Empty ? "-" : towerTypeName(p.tower));
+			ImGui::TableNextColumn();
+			if (p.control == SeatControl::Empty) {
+				ImGui::TextDisabled("-");
+			} else if (p.ready) {
+				ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.5f, 1.0f), "[x]");
+			} else {
+				ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f), "[ ]");
+			}
+			if (amHost) {
+				ImGui::TableNextColumn();
+				if (p.control == SeatControl::HumanRemote) {
+					const int ping = session.seatPingMs(i);
+					if (ping >= 0) {
+						ImGui::Text("%d ms", ping);
+					} else {
+						ImGui::TextDisabled("…");
+					}
+					ImGui::SameLine();
+					char kick[24];
+					std::snprintf(kick, sizeof(kick), "%s##k%d", tr("lobby.kick"), i);
+					if (ImGui::SmallButton(kick)) {
+						session.hostKick(match, i);
+					}
+				} else {
+					ImGui::TextDisabled("-");
+				}
+			}
+		}
+		ImGui::EndTable();
+	}
+	// #79: open/close lobby.
+	if (amHost && match.phase == Phase::Lobby) {
+		bool locked = match.lobbyLocked;
+		if (ImGui::Checkbox(tr("lobby.locked"), &locked)) {
+			session.hostSetLobbyLocked(match, locked);
+		}
 	}
 
 	if (session.mode() == AppMode::Host || (session.mode() == AppMode::Offline && match.phase == Phase::Lobby)) {
@@ -959,9 +1132,29 @@ void drawLobbyScreen(Match& match, NetSession& session, UiState& ui)
 		if (session.mode() == AppMode::Host) {
 			ImGui::Checkbox("Fill empty with AI", &ui.fillAI);
 			match.config.fillEmptyWithAI = ui.fillAI;
+			// #80: every seated human must be ready before start.
+			bool allReady = true;
+			for (int i = 0; i < match.config.playerCount; ++i) {
+				const Player& p = match.players[static_cast<size_t>(i)];
+				if ((p.control == SeatControl::HumanLocal || p.control == SeatControl::HumanRemote) && !p.ready) {
+					allReady = false;
+					break;
+				}
+			}
+			if (!allReady) {
+				ImGui::BeginDisabled();
+			}
 			if (ImGui::Button("Start Match", ImVec2(-1, 40))) {
-				session.hostStartMatch(match);
-				ui.screen = AppScreen::Match;
+				if (session.hostStartMatch(match)) {
+					ui.screen = AppScreen::Match;
+				} else if (session.lastError()[0]) {
+					uiPushToast(ui, session.lastError(), 2.8f);
+					session.clearError();
+				}
+			}
+			if (!allReady) {
+				ImGui::EndDisabled();
+				ImGui::TextDisabled("%s", tr("lobby.waiting_ready"));
 			}
 		}
 	}
@@ -984,6 +1177,41 @@ void drawLobbyScreen(Match& match, NetSession& session, UiState& ui)
 		bool ready = match.players[static_cast<size_t>(session.localSeat())].ready;
 		if (ImGui::Checkbox("Ready", &ready)) {
 			session.requestReady(match, ready);
+		}
+	}
+
+	// v0.8 #81/#108: lobby chat + emote wheel (networked sessions only).
+	if (session.mode() != AppMode::Offline && match.phase == Phase::Lobby) {
+		ImGui::Separator();
+		ImGui::TextUnformatted(tr("lobby.chat"));
+		int shown = 0;
+		for (int i = static_cast<int>(match.log.size()) - 1; i >= 0 && shown < 6; --i) {
+			const MatchEvent& ev = match.log[static_cast<size_t>(i)];
+			if (ev.type != MatchEvent::Type::Info) {
+				continue;
+			}
+			ImGui::TextWrapped("%s", ev.text.c_str());
+			++shown;
+		}
+		ImGui::SetNextItemWidth(-70);
+		const bool enterSend = ImGui::InputText("##chat", ui.chatInput, sizeof(ui.chatInput),
+												ImGuiInputTextFlags_EnterReturnsTrue);
+		ImGui::SameLine();
+		if ((ImGui::Button(tr("lobby.send"), ImVec2(-1, 0)) || enterSend) && ui.chatInput[0]) {
+			if (session.requestChat(match, ui.chatInput)) {
+				ui.chatInput[0] = '\0';
+			}
+		}
+		if (ImGui::SmallButton("o7##em")) {
+			session.requestChat(match, "o7 *salutes*");
+		}
+		ImGui::SameLine();
+		if (ImGui::SmallButton("haha##em")) {
+			session.requestChat(match, "*laughs in plastic*");
+		}
+		ImGui::SameLine();
+		if (ImGui::SmallButton(">:(##em")) {
+			session.requestChat(match, ">:( *angry toy noises*");
 		}
 	}
 
@@ -1457,11 +1685,43 @@ void drawResults(Match& match, NetSession& session, UiState& ui)
 		ImGui::Text("%s: dmg %d / taken %d · cards %d", p.name, sum.damageDealt[static_cast<size_t>(i)],
 					sum.damageTaken[static_cast<size_t>(i)], sum.cardsPlayed[static_cast<size_t>(i)]);
 	}
-	ImGui::Separator();
-	if (session.mode() == AppMode::Host && ImGui::Button(tr("results.rematch"), ImVec2(-1, 36))) {
-		session.hostRematch(match);
-		ui.matchCounted = false;
+	// v0.8 #109: rematch happens when every connected human votes yes.
+	if (match.phase == Phase::Playing) {
 		ui.screen = AppScreen::Match;
+		ui.matchCounted = false;
+		ui.rematchVoteSent = false;
+	}
+
+	ImGui::Separator();
+	if (session.mode() == AppMode::Host) {
+		int votes = 0, needed = 0;
+		session.rematchVoteCounts(match, votes, needed);
+		char label[64];
+		if (needed > 1) {
+			std::snprintf(label, sizeof(label), "%s (%d/%d)", tr("results.rematch"), votes, needed);
+		} else {
+			std::snprintf(label, sizeof(label), "%s", tr("results.rematch"));
+		}
+		if (ImGui::Button(label, ImVec2(-1, 36))) {
+			session.requestRematchVote(match, true);
+			if (match.phase == Phase::Playing) {
+				ui.matchCounted = false;
+				ui.rematchVoteSent = false;
+				ui.screen = AppScreen::Match;
+			}
+		}
+		if (needed > 1) {
+			ImGui::TextDisabled("%s", tr("results.vote_hint"));
+		}
+	}
+	if (session.mode() == AppMode::Client) {
+		if (ui.rematchVoteSent) {
+			ImGui::TextDisabled("%s", tr("results.vote_sent"));
+		} else if (ImGui::Button(tr("results.vote"), ImVec2(-1, 36))) {
+			if (session.requestRematchVote(match, true)) {
+				ui.rematchVoteSent = true;
+			}
+		}
 	}
 	if (session.mode() == AppMode::Offline) {
 		if (ImGui::Button(tr("results.play_again"), ImVec2(-1, 36))) {
@@ -1487,7 +1747,7 @@ void drawResults(Match& match, NetSession& session, UiState& ui)
 
 } // namespace
 
-void uiDraw(Match& match, NetSession& session, UiState& ui)
+void uiDraw(Match& match, NetSession& session, LanDiscovery& discovery, UiState& ui)
 {
 	applyTheme(ui);
 	applyUiScale(ui);
@@ -1511,7 +1771,7 @@ void uiDraw(Match& match, NetSession& session, UiState& ui)
 
 	switch (ui.screen) {
 	case AppScreen::Menu:
-		drawMenuV2(ui);
+		drawMenuV2(discovery, ui);
 		break;
 	case AppScreen::Settings:
 		drawSettings(ui);

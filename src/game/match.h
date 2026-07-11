@@ -36,6 +36,9 @@ struct Match {
 
 	// v0.7 #55 Hot Potato: current crown holder (-1 when mode inactive).
 	int crownSeat = -1;
+
+	// v0.8 #79: host closed the lobby to new joins.
+	bool lobbyLocked = false;
 };
 
 void bumpSync(Match& match);

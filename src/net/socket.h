@@ -66,6 +66,30 @@ private:
 	uint16_t port_ = 0;
 };
 
+// v0.8 #85: non-blocking UDP for LAN lobby beacons.
+class UdpSocket {
+public:
+	UdpSocket() = default;
+	~UdpSocket();
+	UdpSocket(const UdpSocket&) = delete;
+	UdpSocket& operator=(const UdpSocket&) = delete;
+
+	// Sender: unbound socket with SO_BROADCAST enabled.
+	bool openSender();
+	// Receiver: bind the given port (SO_REUSEADDR) for beacon listening.
+	bool openReceiver(uint16_t port);
+	void close();
+	bool valid() const { return sock_ != kInvalidSocket; }
+
+	// Datagram to host:port ("255.255.255.255" broadcasts). True if sent.
+	bool sendTo(const char* host, uint16_t port, const void* data, int len);
+	// Non-blocking. Returns bytes read (0 = none pending, -1 = error); fills sender IP.
+	int recvFrom(void* data, int capacity, char ipOut[64], uint16_t& portOut);
+
+private:
+	SocketHandle sock_ = kInvalidSocket;
+};
+
 // Length-prefixed frames: [u32 size LE][payload]
 // size is payload length only (max 1 MiB).
 class FrameCodec {

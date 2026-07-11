@@ -306,6 +306,123 @@ TcpSocket TcpListener::accept()
 	return out;
 }
 
+UdpSocket::~UdpSocket()
+{
+	close();
+}
+
+void UdpSocket::close()
+{
+	if (sock_ != kInvalidSocket) {
+		TOY_CLOSESOCKET(fromHandle(sock_));
+		sock_ = kInvalidSocket;
+	}
+}
+
+namespace {
+
+bool makeNonBlockingUdp(SocketHandle h)
+{
+#if defined(_WIN32)
+	u_long mode = 1;
+	return TOY_IOCTL(fromHandle(h), FIONBIO, &mode) == 0;
+#else
+	const int fd = fromHandle(h);
+	const int flags = fcntl(fd, F_GETFL, 0);
+	return flags >= 0 && fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0;
+#endif
+}
+
+} // namespace
+
+bool UdpSocket::openSender()
+{
+	close();
+	if (!netInit()) {
+		return false;
+	}
+	auto s = ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+	if (s == INVALID_SOCKET) {
+		return false;
+	}
+	int yes = 1;
+#if defined(_WIN32)
+	setsockopt(s, SOL_SOCKET, SO_BROADCAST, reinterpret_cast<const char*>(&yes), sizeof(yes));
+#else
+	setsockopt(s, SOL_SOCKET, SO_BROADCAST, &yes, sizeof(yes));
+#endif
+	sock_ = toHandle(s);
+	makeNonBlockingUdp(sock_);
+	return true;
+}
+
+bool UdpSocket::openReceiver(uint16_t port)
+{
+	close();
+	if (!netInit()) {
+		return false;
+	}
+	auto s = ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+	if (s == INVALID_SOCKET) {
+		return false;
+	}
+	int yes = 1;
+#if defined(_WIN32)
+	setsockopt(s, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&yes), sizeof(yes));
+#else
+	setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+#endif
+	sockaddr_in addr{};
+	addr.sin_family = AF_INET;
+	addr.sin_addr.s_addr = htonl(INADDR_ANY);
+	addr.sin_port = htons(port);
+	if (bind(s, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == SOCKET_ERROR) {
+		TOY_CLOSESOCKET(s);
+		return false;
+	}
+	sock_ = toHandle(s);
+	makeNonBlockingUdp(sock_);
+	return true;
+}
+
+bool UdpSocket::sendTo(const char* host, uint16_t port, const void* data, int len)
+{
+	if (!valid() || !host || len <= 0) {
+		return false;
+	}
+	sockaddr_in addr{};
+	addr.sin_family = AF_INET;
+	addr.sin_port = htons(port);
+	if (inet_pton(AF_INET, host, &addr.sin_addr) != 1) {
+		return false;
+	}
+	const int n = ::sendto(fromHandle(sock_), static_cast<const char*>(data), len, 0,
+						   reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
+	return n == len;
+}
+
+int UdpSocket::recvFrom(void* data, int capacity, char ipOut[64], uint16_t& portOut)
+{
+	ipOut[0] = '\0';
+	portOut = 0;
+	if (!valid() || capacity <= 0) {
+		return -1;
+	}
+	sockaddr_in addr{};
+	SockLen alen = sizeof(addr);
+	const int n = ::recvfrom(fromHandle(sock_), static_cast<char*>(data), capacity, 0,
+							 reinterpret_cast<sockaddr*>(&addr), &alen);
+	if (n == SOCKET_ERROR) {
+		if (TOY_WOULDBLOCK) {
+			return 0;
+		}
+		return -1;
+	}
+	inet_ntop(AF_INET, &addr.sin_addr, ipOut, 64);
+	portOut = ntohs(addr.sin_port);
+	return n;
+}
+
 void FrameCodec::reset()
 {
 	buf_.clear();

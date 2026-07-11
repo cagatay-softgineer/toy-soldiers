@@ -183,6 +183,11 @@ bool settingsLoad(Settings& out)
 			out.coachTips = parseBool(val, true);
 		} else if (std::strcmp(key, "matchesCompleted") == 0) {
 			out.matchesCompleted = std::atoi(val);
+		} else if (std::strncmp(key, "recentHost", 10) == 0) {
+			const int idx = std::atoi(key + 10);
+			if (idx >= 0 && idx < Settings::kRecentHostMax) {
+				std::snprintf(out.recentHosts[idx], sizeof(out.recentHosts[idx]), "%s", val);
+			}
 		}
 	}
 	std::fclose(f);
@@ -224,8 +229,40 @@ bool settingsSave(const Settings& s)
 	std::fprintf(f, "reducedMotion=%d\n", tmp.reducedMotion ? 1 : 0);
 	std::fprintf(f, "coachTips=%d\n", tmp.coachTips ? 1 : 0);
 	std::fprintf(f, "matchesCompleted=%d\n", tmp.matchesCompleted);
+	for (int i = 0; i < Settings::kRecentHostMax; ++i) {
+		if (tmp.recentHosts[i][0]) {
+			std::fprintf(f, "recentHost%d=%s\n", i, tmp.recentHosts[i]);
+		}
+	}
 	std::fclose(f);
 	return true;
+}
+
+void settingsAddRecentHost(Settings& s, const char* name, const char* ip, int port)
+{
+	if (!ip || !ip[0]) {
+		return;
+	}
+	char entry[96];
+	std::snprintf(entry, sizeof(entry), "%s|%s|%d", (name && name[0]) ? name : "Host", ip, port);
+	// Dedup by ip|port suffix.
+	char suffix[80];
+	std::snprintf(suffix, sizeof(suffix), "|%s|%d", ip, port);
+	int writeAt = Settings::kRecentHostMax - 1;
+	for (int i = 0; i < Settings::kRecentHostMax; ++i) {
+		if (s.recentHosts[i][0] && std::strstr(s.recentHosts[i], suffix)) {
+			writeAt = i;
+			break;
+		}
+		if (!s.recentHosts[i][0]) {
+			writeAt = i;
+			break;
+		}
+	}
+	for (int i = writeAt; i > 0; --i) {
+		std::snprintf(s.recentHosts[i], sizeof(s.recentHosts[i]), "%s", s.recentHosts[i - 1]);
+	}
+	std::snprintf(s.recentHosts[0], sizeof(s.recentHosts[0]), "%s", entry);
 }
 
 namespace {

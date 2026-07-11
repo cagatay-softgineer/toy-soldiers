@@ -18,7 +18,9 @@ constexpr int kDefaultTowerHp = 30;
 constexpr int kMaxHandSize = 8;
 constexpr int kPlayerNameLen = 24;
 constexpr uint16_t kDefaultPort = 27123;
-constexpr uint16_t kProtocolVersion = 5; // v0.7: modes, towers, keywords, crown, deck mods
+constexpr uint16_t kProtocolVersion = 6; // v0.8: heartbeat/ping, tokens, intent ids, lobby lock
+constexpr uint16_t kBeaconPort = 27124;  // v0.8 #85: UDP LAN discovery
+constexpr int kRoomCodeLen = 5;          // 4 letters + NUL
 
 enum class Phase : uint8_t {
 	Lobby,

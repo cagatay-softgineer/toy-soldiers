@@ -66,20 +66,22 @@ uint16_t readU16(const uint8_t*& p, const uint8_t* end, bool& ok)
 
 } // namespace
 
-std::vector<uint8_t> makeHello(const char* name)
+std::vector<uint8_t> makeHello(const char* name, uint32_t reconnectToken)
 {
 	std::vector<uint8_t> out;
 	writeHeader(out, MsgType::Hello);
 	writeStr24(out, name);
 	writeU16(out, kProtocolVersion);
+	writeI32(out, static_cast<int32_t>(reconnectToken));
 	return out;
 }
 
-std::vector<uint8_t> makeWelcome(int seat, uint16_t /*port*/)
+std::vector<uint8_t> makeWelcome(int seat, uint32_t reconnectToken)
 {
 	std::vector<uint8_t> out;
 	writeHeader(out, MsgType::Welcome);
 	writeI32(out, seat);
+	writeI32(out, static_cast<int32_t>(reconnectToken));
 	return out;
 }
 
@@ -125,10 +127,11 @@ std::vector<uint8_t> makeSetCosmetics(const Cosmetics& cos)
 	return out;
 }
 
-std::vector<uint8_t> makePlayCard(int handIndex, int targetPlayer)
+std::vector<uint8_t> makePlayCard(uint32_t intentId, int handIndex, int targetPlayer)
 {
 	std::vector<uint8_t> out;
 	writeHeader(out, MsgType::PlayCard);
+	writeI32(out, static_cast<int32_t>(intentId));
 	writeI32(out, handIndex);
 	writeI32(out, targetPlayer);
 	return out;
@@ -172,15 +175,13 @@ bool parseHeader(const uint8_t* data, size_t size, MsgHeader& out, const uint8_t
 	if (out.magic != kMsgMagic) {
 		return false;
 	}
-	if (out.version != kProtocolVersion) {
-		return false;
-	}
+	// v0.8 #88: version intentionally NOT checked here — callers reject with a message.
 	payload = data + sizeof(MsgHeader);
 	payloadSize = size - sizeof(MsgHeader);
 	return true;
 }
 
-bool readHello(const uint8_t* p, size_t n, char nameOut[kPlayerNameLen], uint16_t& version)
+bool readHello(const uint8_t* p, size_t n, char nameOut[kPlayerNameLen], uint16_t& version, uint32_t& token)
 {
 	if (n < kPlayerNameLen + 2) {
 		return false;
@@ -188,15 +189,26 @@ bool readHello(const uint8_t* p, size_t n, char nameOut[kPlayerNameLen], uint16_
 	std::memcpy(nameOut, p, kPlayerNameLen);
 	nameOut[kPlayerNameLen - 1] = '\0';
 	version = static_cast<uint16_t>(p[kPlayerNameLen] | (p[kPlayerNameLen + 1] << 8));
+	token = 0;
+	if (n >= kPlayerNameLen + 6) {
+		bool ok = true;
+		const uint8_t* cur = p + kPlayerNameLen + 2;
+		const uint8_t* end = p + n;
+		token = static_cast<uint32_t>(readI32(cur, end, ok));
+		if (!ok) {
+			token = 0;
+		}
+	}
 	return true;
 }
 
-bool readWelcome(const uint8_t* p, size_t n, int& seat)
+bool readWelcome(const uint8_t* p, size_t n, int& seat, uint32_t& token)
 {
 	bool ok = true;
 	const uint8_t* cur = p;
 	const uint8_t* end = p + n;
 	seat = readI32(cur, end, ok);
+	token = static_cast<uint32_t>(readI32(cur, end, ok));
 	return ok;
 }
 
@@ -264,14 +276,119 @@ bool readSetCosmetics(const uint8_t* p, size_t n, Cosmetics& cos)
 	return true;
 }
 
-bool readPlayCard(const uint8_t* p, size_t n, int& handIndex, int& target)
+bool readPlayCard(const uint8_t* p, size_t n, uint32_t& intentId, int& handIndex, int& target)
 {
 	bool ok = true;
 	const uint8_t* cur = p;
 	const uint8_t* end = p + n;
+	intentId = static_cast<uint32_t>(readI32(cur, end, ok));
 	handIndex = readI32(cur, end, ok);
 	target = readI32(cur, end, ok);
 	return ok;
+}
+
+bool readU32(const uint8_t* p, size_t n, uint32_t& out)
+{
+	bool ok = true;
+	const uint8_t* cur = p;
+	const uint8_t* end = p + n;
+	out = static_cast<uint32_t>(readI32(cur, end, ok));
+	return ok;
+}
+
+bool readRematchVote(const uint8_t* p, size_t n, bool& accept)
+{
+	if (n < 1) {
+		return false;
+	}
+	accept = p[0] != 0;
+	return true;
+}
+
+std::vector<uint8_t> makeHeartbeat(uint32_t millis)
+{
+	std::vector<uint8_t> out;
+	writeHeader(out, MsgType::Heartbeat);
+	writeI32(out, static_cast<int32_t>(millis));
+	return out;
+}
+
+std::vector<uint8_t> makePong(uint32_t echoedMillis)
+{
+	std::vector<uint8_t> out;
+	writeHeader(out, MsgType::Pong);
+	writeI32(out, static_cast<int32_t>(echoedMillis));
+	return out;
+}
+
+std::vector<uint8_t> makeKick(const char* reason)
+{
+	std::vector<uint8_t> out;
+	writeHeader(out, MsgType::Kick);
+	const char* r = reason ? reason : "kicked by host";
+	const uint16_t len = static_cast<uint16_t>(std::strlen(r) > 200 ? 200 : std::strlen(r));
+	writeU16(out, len);
+	out.insert(out.end(), r, r + len);
+	return out;
+}
+
+std::vector<uint8_t> makeResyncRequest()
+{
+	std::vector<uint8_t> out;
+	writeHeader(out, MsgType::ResyncRequest);
+	return out;
+}
+
+std::vector<uint8_t> makeRematchVote(bool accept)
+{
+	std::vector<uint8_t> out;
+	writeHeader(out, MsgType::RematchVote);
+	out.push_back(accept ? 1 : 0);
+	return out;
+}
+
+std::vector<uint8_t> packBeacon(const BeaconInfo& b)
+{
+	std::vector<uint8_t> out;
+	out.reserve(4 + kRoomCodeLen + 2 + 2 + kPlayerNameLen + 2);
+	out.push_back(static_cast<uint8_t>(kBeaconMagic & 0xff));
+	out.push_back(static_cast<uint8_t>((kBeaconMagic >> 8) & 0xff));
+	out.push_back(static_cast<uint8_t>((kBeaconMagic >> 16) & 0xff));
+	out.push_back(static_cast<uint8_t>((kBeaconMagic >> 24) & 0xff));
+	out.insert(out.end(), b.code, b.code + kRoomCodeLen);
+	writeU16(out, b.version);
+	writeU16(out, b.tcpPort);
+	out.insert(out.end(), b.hostName, b.hostName + kPlayerNameLen);
+	out.push_back(b.seatsTaken);
+	out.push_back(b.seatsTotal);
+	return out;
+}
+
+bool parseBeacon(const uint8_t* data, size_t size, BeaconInfo& out)
+{
+	const size_t need = 4 + kRoomCodeLen + 2 + 2 + kPlayerNameLen + 2;
+	if (!data || size < need) {
+		return false;
+	}
+	const uint32_t magic =
+		static_cast<uint32_t>(data[0] | (data[1] << 8) | (data[2] << 16) | (static_cast<uint32_t>(data[3]) << 24));
+	if (magic != kBeaconMagic) {
+		return false;
+	}
+	const uint8_t* p = data + 4;
+	std::memcpy(out.code, p, kRoomCodeLen);
+	out.code[kRoomCodeLen - 1] = '\0';
+	p += kRoomCodeLen;
+	out.version = static_cast<uint16_t>(p[0] | (p[1] << 8));
+	p += 2;
+	out.tcpPort = static_cast<uint16_t>(p[0] | (p[1] << 8));
+	p += 2;
+	std::memcpy(out.hostName, p, kPlayerNameLen);
+	out.hostName[kPlayerNameLen - 1] = '\0';
+	p += kPlayerNameLen;
+	out.seatsTaken = p[0];
+	out.seatsTotal = p[1];
+	return true;
 }
 
 bool readString(const uint8_t* p, size_t n, std::string& out)

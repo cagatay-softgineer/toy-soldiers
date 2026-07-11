@@ -55,6 +55,13 @@ struct UiState {
 	bool showEventHistory = false; // #68
 	float turnTimeLeft = -1.0f;    // #56 display (set by main; <0 = off)
 
+	// --- v0.8 Reliable Party ---
+	char roomCodeInput[8] = {};    // #86 join-by-code field
+	char chatInput[200] = {};      // #81 lobby chat
+	bool rematchVoteSent = false;  // #109 client-side
+	char recentHosts[5][96] = {};  // #86/#110 mirrored from Settings ("name|ip|port")
+	bool recentHostsDirty = false; // main persists when set
+
 	bool showHowToPlay = false;
 	bool autoOrbit = true;
 	float masterVolume = 1.0f;
@@ -102,8 +109,9 @@ struct UiState {
 void uiInit();
 void uiShutdown();
 void uiBeginFrame(int width, int height, double dt);
-// dt used for banners/toasts; may request screen transitions via ui.screen
-void uiDraw(Match& match, NetSession& session, UiState& ui);
+// dt used for banners/toasts; may request screen transitions via ui.screen.
+// discovery: LAN lobby browser results for the menu (#85/#86), owned by main.
+void uiDraw(Match& match, NetSession& session, LanDiscovery& discovery, UiState& ui);
 void uiEndFrame();
 void uiEvent(const sapp_event* e);
 bool uiWantsMouse();

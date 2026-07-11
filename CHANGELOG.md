@@ -5,7 +5,37 @@ All notable changes to **Oyuncak Asker Masa Savaşı (toy-soldiers)** are docume
 ## [Unreleased]
 
 ### Planned
-- v0.8 Reliable Party — see [docs/ROADMAP_to_v1.md](docs/ROADMAP_to_v1.md)
+- v0.9 Identity & Content — see [docs/ROADMAP_to_v1.md](docs/ROADMAP_to_v1.md)
+
+## [0.8.0-dev] — 2026-07-11
+
+### Added — v0.8 Reliable Party (protocol v6)
+- **LAN discovery (#85/#86):** host broadcasts a UDP beacon (port 27124) with a 4-letter room code,
+  host name, and seat counts; menu shows a live LAN game list, join-by-code field, and a
+  recent-hosts list persisted in settings; manual IP moved behind an "advanced" collapse (#87)
+- **Lobby product (#78–#82):** seat-card table with ready checkmarks, per-seat ping, and kick
+  buttons; open/close lobby toggle (locked lobbies reject joins); ready-up required before start;
+  room code display with copy-to-clipboard; rate-limited lobby chat + emote quick-buttons (#108)
+- **Sync robustness (#91–#93):** clients ignore stale snapshots (matchId + syncGeneration);
+  broken snapshots trigger an automatic full-resync request; host heartbeats every 1s and both
+  sides drop silent peers after 8s with a human-readable reason (#98)
+- **Reconnect (#99/#100-lite):** mid-match disconnect hands the seat to the AI and reserves it
+  for 60s; rejoining with the same reconnect token (issued in Welcome) reclaims the seat live
+- **Fairness & hygiene (#94, #103, #106, #88):** PlayCard carries an intent id (duplicate intents
+  ignored — no double-spend); host rejections always carry the describeIllegalPlay reason;
+  lightweight intent/chat rate limits; protocol version mismatch now hard-rejects with an
+  "update the game" message on both sides
+- **Rematch votes (#109):** rematch starts only when every connected human votes yes;
+  host button shows the tally, clients get a vote button
+- **Net QA (#113–#115):** toy_net_test expanded to 12 scenarios — beacon round-trip on loopback,
+  version-mismatch reject, malformed-frame fuzz, lobby lock/kick/ready gate, mid-lobby disconnect
+  frees the seat, mid-match drop → AI takeover → token reclaim, chat relay, ping measurement,
+  unanimous rematch, and a 4-seat (host + 3 clients) loopback stress match
+
+### Deferred (tracked for later versions)
+- #95/#96 snapshot compression & deltas (needs a compression dep; snapshots are ~2.3 KB),
+  #101/#102 host migration, #104/#105 deck hash & seed commit-reveal, #89/#90 relay/QR,
+  #107 replay export, #111 spectator, #97 lockstep, #116 protocol docs
 
 ## [0.7.0-dev] — 2026-07-11
 

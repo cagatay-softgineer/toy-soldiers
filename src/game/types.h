@@ -87,12 +87,16 @@ enum class AiPersona : uint8_t {
 	Chaos = 3,
 };
 
-// Table / room theme — drives visuals + event weights (M3).
+// Table / room theme — drives visuals + event weights (M3, expanded v0.9 #136-#139).
 enum class MapId : uint8_t {
-	LivingRoom = 0, // cat + light rain
-	Desert = 1,     // sandstorm + rare flood
-	Backyard = 2,   // rain + flood
-	Count = 3,
+	LivingRoom = 0,    // cat + light rain
+	Desert = 1,        // sandstorm + rare flood
+	Backyard = 2,      // rain + flood
+	KidsBedroom = 3,   // cat + blackout (night light)
+	Garage = 4,        // flood (oil) + blackout
+	PicnicBlanket = 5, // ants!
+	ChristmasTable = 6, // snow-rain + cat, cozy
+	Count = 7,
 };
 
 // Controlled world events (concept board M3).
@@ -104,6 +108,7 @@ enum class EventKind : uint8_t {
 	Cat = 4,       // warn then physics knock (no HP by default)
 	Dog = 5,       // v0.7 #66: pushes ALL soldiers inward (physics only)
 	Blackout = 6,  // v0.7 #67: enemy HP hidden for 1 turn (UI fog)
+	Ants = 7,      // v0.9 #138: ants swarm one seat — soldiers jitter, no damage
 };
 
 enum class SeatControl : uint8_t {
@@ -126,6 +131,17 @@ enum class PlasticColor : uint8_t {
 	White,
 	Pink,
 	Camo,
+	// --- v0.9 #142 wave ---
+	JellyLime,   // transparent jelly look
+	JellyBerry,
+	GoldChrome,  // fake chrome
+	SilverChrome,
+	Teal,
+	Navy,
+	Chocolate,
+	Coal,
+	GlowMint,
+	Lavender,
 	Count
 };
 
@@ -134,6 +150,11 @@ enum class TowerSkin : uint8_t {
 	Sandcastle,     // wider, sandy
 	Rocket,         // tall thin
 	Fort,           // cardboard fort
+	// --- v0.9 #143 wave ---
+	BrickStack,     // Lego-ish
+	TinCan,
+	BookStack,
+	DiceTower,
 	Count
 };
 
@@ -143,6 +164,13 @@ enum class Accessory : uint8_t {
 	SantaHat,
 	Bandana,
 	StarMedal,
+	// --- v0.9 #144 wave ---
+	PirateHat,
+	ChefHat,
+	Antenna,
+	Cape,
+	Backpack,
+	Flag,
 	Count
 };
 
@@ -162,7 +190,8 @@ struct CardDef {
 	int power = 0;
 	int range = 1;
 	bool freeTarget = true;
-	uint16_t keywords = KwNone; // v0.7 #42
+	uint16_t keywords = KwNone;    // v0.7 #42
+	const char* descriptionTr = ""; // v0.9 #153 (empty = fall back to EN)
 };
 
 struct CardInstance {
@@ -372,16 +401,25 @@ inline const char* mapName(MapId m)
 	case MapId::LivingRoom: return "Living Room Table";
 	case MapId::Desert: return "Desert Playmat";
 	case MapId::Backyard: return "Backyard Picnic";
+	case MapId::KidsBedroom: return "Kids Bedroom";
+	case MapId::Garage: return "Garage Workbench";
+	case MapId::PicnicBlanket: return "Picnic Blanket";
+	case MapId::ChristmasTable: return "Christmas Table";
 	default: return "?";
 	}
 }
 
+// v0.9 #156: toy-catalog voice flavor + recommended events (#140).
 inline const char* mapBlurb(MapId m)
 {
 	switch (m) {
-	case MapId::LivingRoom: return "Green felt, toys, curious pets.";
-	case MapId::Desert: return "Sandy mat — storms cut visibility.";
-	case MapId::Backyard: return "Outdoor table — rain & puddles.";
+	case MapId::LivingRoom: return "Green felt, toys, curious pets. Watch the cat!";
+	case MapId::Desert: return "Sandy mat — storms cut visibility. Expect sandstorms.";
+	case MapId::Backyard: return "Outdoor table — rain & puddles. Expect rain and floods.";
+	case MapId::KidsBedroom: return "Bunk-bed shadows and a brave night light. Expect blackouts and the cat.";
+	case MapId::Garage: return "Dad's workbench — mind the oil stains. Expect oil floods and flickering lights.";
+	case MapId::PicnicBlanket: return "Checkered blanket, crumbs everywhere. Expect ANTS. So many ants.";
+	case MapId::ChristmasTable: return "Cocoa, tinsel, and a bored cat. Expect gentle snow-rain and pounces.";
 	default: return "";
 	}
 }
@@ -396,6 +434,7 @@ inline const char* eventKindName(EventKind e)
 	case EventKind::Cat: return "Cat";
 	case EventKind::Dog: return "Dog";
 	case EventKind::Blackout: return "Blackout";
+	case EventKind::Ants: return "Ants";
 	}
 	return "?";
 }

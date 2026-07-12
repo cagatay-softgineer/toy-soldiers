@@ -48,6 +48,12 @@ struct Settings {
 	// v0.8 #86/#110: recent hosts ("name|ip|port"), most recent first.
 	static constexpr int kRecentHostMax = 5;
 	char recentHosts[kRecentHostMax][96] = {};
+
+	// v0.9 #134: per-category volumes (masterVolume above is the master).
+	float sfxVolume = 0.8f;
+	float musicVolume = 0.5f;
+	// v0.9 #146: local unlock track.
+	int wins = 0;
 };
 
 // v0.8: push a host to the top of the recent list (dedup by ip+port).

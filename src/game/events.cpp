@@ -46,65 +46,105 @@ int pickLivingSeat(Match& m)
 	return seats[randRange(m.rng, 0, n - 1)];
 }
 
-// Weights per map for random rolls (relative ints). v0.7 adds dog + blackout (#66, #67).
-void eventWeights(MapId map, int& sand, int& rain, int& flood, int& cat, int& dog, int& blackout)
+// Weights per map for random rolls (relative ints). v0.9 adds ants + 4 new rooms (#136-#139).
+struct EventWeights {
+	int sand = 0, rain = 0, flood = 0, cat = 0, dog = 0, blackout = 0, ants = 0;
+};
+
+EventWeights eventWeightsFor(MapId map)
 {
-	sand = rain = flood = cat = dog = blackout = 0;
+	EventWeights w;
 	switch (map) {
 	case MapId::LivingRoom:
-		cat = 40;
-		rain = 20;
-		dog = 15;
-		blackout = 10;
-		flood = 5;
-		sand = 5;
+		w.cat = 40;
+		w.rain = 20;
+		w.dog = 15;
+		w.blackout = 10;
+		w.flood = 5;
+		w.sand = 5;
 		break;
 	case MapId::Desert:
-		sand = 50;
-		flood = 15;
-		blackout = 10;
-		rain = 5;
-		cat = 5;
-		dog = 5;
+		w.sand = 50;
+		w.flood = 15;
+		w.blackout = 10;
+		w.rain = 5;
+		w.cat = 5;
+		w.dog = 5;
 		break;
 	case MapId::Backyard:
-		rain = 35;
-		flood = 25;
-		dog = 20;
-		cat = 10;
-		sand = 5;
-		blackout = 5;
+		w.rain = 35;
+		w.flood = 25;
+		w.dog = 15;
+		w.cat = 10;
+		w.ants = 5;
+		w.sand = 5;
+		w.blackout = 5;
+		break;
+	case MapId::KidsBedroom:
+		w.cat = 35;
+		w.blackout = 30;
+		w.dog = 10;
+		w.flood = 5;
+		w.rain = 5;
+		w.ants = 5;
+		break;
+	case MapId::Garage:
+		w.flood = 35; // oil spills
+		w.blackout = 25;
+		w.dog = 10;
+		w.cat = 5;
+		w.sand = 5;
+		w.rain = 5;
+		w.ants = 5;
+		break;
+	case MapId::PicnicBlanket:
+		w.ants = 45;
+		w.rain = 15;
+		w.dog = 15;
+		w.cat = 10;
+		w.flood = 5;
+		w.sand = 5;
+		break;
+	case MapId::ChristmasTable:
+		w.rain = 30; // gentle snow
+		w.cat = 30;
+		w.blackout = 10;
+		w.dog = 10;
+		w.flood = 5;
 		break;
 	default:
 		break;
 	}
+	return w;
 }
 
 EventKind rollEventKind(Match& m)
 {
-	int sand = 0, rain = 0, flood = 0, cat = 0, dog = 0, blackout = 0;
-	eventWeights(m.config.mapId, sand, rain, flood, cat, dog, blackout);
-	const int total = sand + rain + flood + cat + dog + blackout;
+	const EventWeights w = eventWeightsFor(m.config.mapId);
+	const int total = w.sand + w.rain + w.flood + w.cat + w.dog + w.blackout + w.ants;
 	if (total <= 0) {
 		return EventKind::None;
 	}
 	int r = randRange(m.rng, 0, total - 1);
-	if ((r -= sand) < 0) {
+	if ((r -= w.sand) < 0) {
 		return EventKind::Sandstorm;
 	}
-	if ((r -= rain) < 0) {
+	if ((r -= w.rain) < 0) {
 		return EventKind::Rain;
 	}
-	if ((r -= flood) < 0) {
+	if ((r -= w.flood) < 0) {
 		return EventKind::Flood;
 	}
-	if ((r -= cat) < 0) {
+	if ((r -= w.cat) < 0) {
 		return EventKind::Cat;
 	}
-	if ((r -= dog) < 0) {
+	if ((r -= w.dog) < 0) {
 		return EventKind::Dog;
 	}
-	return EventKind::Blackout;
+	if ((r -= w.blackout) < 0) {
+		return EventKind::Blackout;
+	}
+	return EventKind::Ants;
 }
 
 void beginEvent(Match& m, EventKind kind, int focus)
@@ -177,6 +217,26 @@ void beginEvent(Match& m, EventKind kind, int focus)
 		m.world.remainingTurns = 1;
 		std::snprintf(buf, sizeof(buf), "WORLD: Blackout! Enemy tower HP is hidden for 1 turn.");
 		pushWorld(m, -1, static_cast<int>(kind), buf);
+		break;
+	case EventKind::Ants:
+		// v0.9 #138: ants swarm one seat — soldiers jitter on that seat's turns. No HP.
+		m.world.remainingTurns = 2;
+		if (focus < 0) {
+			focus = pickLivingSeat(m);
+			m.world.focusSeat = focus;
+		}
+		if (focus >= 0) {
+			std::snprintf(buf, sizeof(buf), "WORLD: Ants! A column marches through %s's soldiers.",
+						  m.players[static_cast<size_t>(focus)].name);
+			m.pendingPhysicsImpulse.targetPlayer = focus;
+			m.pendingPhysicsImpulse.strength = 1.2f;
+			m.pendingPhysicsImpulse.frames = 1;
+		} else {
+			std::snprintf(buf, sizeof(buf), "WORLD: Ants wander off (no seats).");
+			m.world.kind = EventKind::None;
+			m.world.remainingTurns = 0;
+		}
+		pushWorld(m, focus, static_cast<int>(kind), buf);
 		break;
 	default:
 		m.world = {};
@@ -338,6 +398,11 @@ void formatWorldEventStatus(const Match& match, char* out, int outCap)
 	case EventKind::Blackout:
 		std::snprintf(out, outCap, "Blackout (%d) — enemy tower HP hidden", match.world.remainingTurns);
 		break;
+	case EventKind::Ants:
+		std::snprintf(out, outCap, "Ants on %s (%d) — soldiers jitter, no HP damage",
+					  match.world.focusSeat >= 0 ? match.players[static_cast<size_t>(match.world.focusSeat)].name : "?",
+					  match.world.remainingTurns);
+		break;
 	default:
 		std::snprintf(out, outCap, "Map: %s", mapName(match.config.mapId));
 		break;
@@ -359,6 +424,14 @@ void tickWorldEvents(Match& match)
 	// Flood leak applies when the active player begins their turn under flood.
 	if (seatIsFlooded(match, match.activePlayer)) {
 		applyFloodLeak(match, match.activePlayer);
+	}
+
+	// v0.9 Ants: jitter the swarmed seat's soldiers when their turn starts (physics only).
+	if (match.world.kind == EventKind::Ants && match.world.remainingTurns > 0 &&
+		match.world.focusSeat == match.activePlayer && match.world.focusSeat >= 0) {
+		match.pendingPhysicsImpulse.targetPlayer = match.world.focusSeat;
+		match.pendingPhysicsImpulse.strength = 1.0f;
+		match.pendingPhysicsImpulse.frames = 1;
 	}
 
 	// Cat warning resolves into pounce.
@@ -410,6 +483,26 @@ void mapTableColor(MapId map, float& r, float& g, float& b)
 		g = 0.52f;
 		b = 0.30f;
 		break;
+	case MapId::KidsBedroom: // soft blue play rug
+		r = 0.26f;
+		g = 0.34f;
+		b = 0.62f;
+		break;
+	case MapId::Garage: // scuffed workbench top
+		r = 0.42f;
+		g = 0.38f;
+		b = 0.32f;
+		break;
+	case MapId::PicnicBlanket: // red-checkered blanket
+		r = 0.72f;
+		g = 0.28f;
+		b = 0.26f;
+		break;
+	case MapId::ChristmasTable: // deep green runner
+		r = 0.14f;
+		g = 0.38f;
+		b = 0.22f;
+		break;
 	case MapId::LivingRoom:
 	default:
 		r = 0.28f;
@@ -431,6 +524,26 @@ void mapFloorColor(MapId map, float& r, float& g, float& b)
 		r = 0.25f;
 		g = 0.38f;
 		b = 0.22f;
+		break;
+	case MapId::KidsBedroom: // dark bedroom carpet
+		r = 0.16f;
+		g = 0.16f;
+		b = 0.26f;
+		break;
+	case MapId::Garage: // concrete
+		r = 0.30f;
+		g = 0.30f;
+		b = 0.32f;
+		break;
+	case MapId::PicnicBlanket: // park grass
+		r = 0.22f;
+		g = 0.42f;
+		b = 0.20f;
+		break;
+	case MapId::ChristmasTable: // warm wood floor
+		r = 0.34f;
+		g = 0.22f;
+		b = 0.14f;
 		break;
 	default:
 		r = 0.35f;

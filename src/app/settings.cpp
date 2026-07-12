@@ -76,6 +76,23 @@ void clampSettings(Settings& out)
 	if (out.matchesCompleted > 99999) {
 		out.matchesCompleted = 99999;
 	}
+	auto clamp01 = [](float& v) {
+		if (v < 0.0f) {
+			v = 0.0f;
+		}
+		if (v > 1.0f) {
+			v = 1.0f;
+		}
+	};
+	clamp01(out.masterVolume);
+	clamp01(out.sfxVolume);
+	clamp01(out.musicVolume);
+	if (out.wins < 0) {
+		out.wins = 0;
+	}
+	if (out.wins > 99999) {
+		out.wins = 99999;
+	}
 }
 
 } // namespace
@@ -188,6 +205,12 @@ bool settingsLoad(Settings& out)
 			if (idx >= 0 && idx < Settings::kRecentHostMax) {
 				std::snprintf(out.recentHosts[idx], sizeof(out.recentHosts[idx]), "%s", val);
 			}
+		} else if (std::strcmp(key, "sfxVolume") == 0) {
+			out.sfxVolume = static_cast<float>(std::atof(val));
+		} else if (std::strcmp(key, "musicVolume") == 0) {
+			out.musicVolume = static_cast<float>(std::atof(val));
+		} else if (std::strcmp(key, "wins") == 0) {
+			out.wins = std::atoi(val);
 		}
 	}
 	std::fclose(f);
@@ -234,6 +257,9 @@ bool settingsSave(const Settings& s)
 			std::fprintf(f, "recentHost%d=%s\n", i, tmp.recentHosts[i]);
 		}
 	}
+	std::fprintf(f, "sfxVolume=%.3f\n", static_cast<double>(tmp.sfxVolume));
+	std::fprintf(f, "musicVolume=%.3f\n", static_cast<double>(tmp.musicVolume));
+	std::fprintf(f, "wins=%d\n", tmp.wins);
 	std::fclose(f);
 	return true;
 }

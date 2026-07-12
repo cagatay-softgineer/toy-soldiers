@@ -82,6 +82,10 @@ struct UiState {
 	bool reducedMotion = false;
 	bool coachTips = true;
 	int matchesCompleted = 0;
+	// v0.9
+	int wins = 0;            // #146 unlock track
+	float sfxVolume = 0.8f;  // #134
+	float musicVolume = 0.5f;
 	int timelineIndex = -1; // scrubber into match.log (-1 = live/end)
 	bool showTimeline = true;
 	bool coachTipDismissed = false; // per-session; re-offer next match until 3 done

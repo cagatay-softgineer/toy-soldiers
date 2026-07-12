@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 project(toy_soldiers
-	VERSION 0.8.0
+	VERSION 0.9.0
 	DESCRIPTION "Oyuncak Asker Masa Savasi — Box3D game jam prototype"
 	LANGUAGES C CXX
 )
@@ -74,6 +74,8 @@ endif()
 
 add_library(sokol INTERFACE)
 target_include_directories(sokol SYSTEM INTERFACE "${SOKOL_DIR}")
+# v0.9: sokol_audio.h vendored separately (box3d's extern set has no audio header).
+target_include_directories(sokol SYSTEM INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/extern/sokol")
 if(WIN32)
 	target_compile_definitions(sokol INTERFACE SOKOL_D3D11)
 	target_link_libraries(sokol INTERFACE d3d11 dxgi dxguid d3dcompiler user32 gdi32 shell32 ole32)
@@ -178,6 +180,12 @@ if(MSVC)
 	set_property(TARGET toy_mode_test PROPERTY VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
 endif()
 
+add_executable(toy_content_test src/content_test_main.cpp)
+target_link_libraries(toy_content_test PRIVATE toy_game)
+if(MSVC)
+	set_property(TARGET toy_content_test PROPERTY VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+endif()
+
 add_executable(toy_golden_seed_test src/game/golden_seed_test_main.cpp)
 target_link_libraries(toy_golden_seed_test PRIVATE toy_game)
 if(MSVC)
@@ -191,6 +199,8 @@ add_executable(toy_soldiers
 	src/main.cpp
 	src/sokol_impl.c
 	src/sokol_imgui_impl.cpp
+	src/app/audio.cpp
+	src/app/audio.h
 	src/render/camera.cpp
 	src/render/camera.h
 	src/render/draw3d.cpp

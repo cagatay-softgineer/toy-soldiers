@@ -5,7 +5,48 @@ All notable changes to **Oyuncak Asker Masa Savaşı (toy-soldiers)** are docume
 ## [Unreleased]
 
 ### Planned
-- v0.9 Identity & Content — see [docs/ROADMAP_to_v1.md](docs/ROADMAP_to_v1.md)
+- v1.0 Ship Toy Soldiers — see [docs/ROADMAP_to_v1.md](docs/ROADMAP_to_v1.md)
+
+## [0.9.0-dev] — 2026-07-12
+
+### Added — v0.9 Identity & Content
+- **Rendering (#117-#121, #124-#125):** one instanced draw call for the whole table;
+  directional + ambient "plastic" shading with a cheap sheen; blob shadows under towers and
+  soldiers; pulsing ground ring on the selected target; soldier idle bob + victory cheer;
+  tower damage flash and crack tiers (bruise <50%, char <25%); felt variation panels
+  (checkered on the picnic blanket)
+- **Audio (#130-#134):** fully procedural sokol_audio synth (no asset files) — card/damage/
+  shield/draw/destroy SFX, UI click, illegal buzz, your-turn chime, victory fanfare; per-event
+  stingers (meow, woof, rain patter, ants); menu lullaby + match march loops and a results
+  sting from a tiny step sequencer; master/SFX/music sliders persisted in settings
+  (sokol_audio.h vendored under `extern/sokol/`)
+- **Maps (#136-#140):** Kids Bedroom (bunk bed, night light), Garage Workbench (pegboard
+  tools, oil stain), Picnic Blanket (checker pattern, crumbs), Christmas Table (tree, gifts,
+  candle) — 7 rooms total with per-map event weights, palettes, and toy-catalog flavor
+  blurbs (#156); new **Ants** ambient event (jitters one seat's soldiers, zero damage)
+- **Effects (#127-#129, #158):** capped 256-particle pool — rain droplets (snow on the
+  Christmas table), sandstorm grit, flood splashes, ant trails, and a 120-bead victory
+  confetti burst; intro camera fly-over on match start (respects reduced motion)
+- **Cosmetics (#142-#146):** +10 plastics (jellies, fake chromes, glow mint…), +4 tower
+  skins (Brick Stack, Tin Can, Book Stack, Dice Tower), +6 accessories (pirate/chef hats,
+  antenna, cape, backpack, team flag) → 39 items; six named sets ("Birthday Platoon",
+  "North Pole Guard"…); local unlock track driven by matches played / wins with the rule
+  shown on locked entries
+- **Cards (#148-#150, #153):** catalog grown to 30 defs (+Domino Push, Blanket Fort, Bubble
+  Wrap, Tidy Up, Battle Plan, Glitter Bomb, Night Watch — sideboard material for deck
+  tweaks); catalog is data-driven from `data/cards.json` with a safety floor (broken files
+  can't nuke the game) and Debug hot-reload; complete Turkish card text with live-language
+  lookup; balance report now exports `balance_report.csv` per trial
+- **i18n (#153-#155):** remaining lobby/match/settings literals routed through the EN/TR
+  dictionary; language still switches live in settings
+- **QA:** new `toy_content_test` gate (catalog/TR text, JSON round-trip + safety, 7-map
+  match sweep, ants, cosmetics counts, unlocks, snapshot) wired into `verify.ps1` —
+  8 gates total, all green; graphical smoke-launch verified
+
+### Notes
+- Linux configure preset exists but remains unverified on this machine (#159)
+- Deferred: real textures (#120), SSAO/GLTF (#122/#123), card-play arc UI anim (#126),
+  seasonal deck modifier (#151), spatial SFX (#135), macOS smoke (#161)
 
 ## [0.8.0-dev] — 2026-07-11
 

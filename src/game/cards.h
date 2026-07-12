@@ -7,9 +7,25 @@
 
 namespace toy {
 
-// v0.7 catalog — 23 defs across Attack / Defense / Tactic / Event with keywords.
+// v0.9 catalog — 30 defs across Attack / Defense / Tactic / Event with keywords,
+// optionally overridden from data/cards.json (#148).
 std::span<const CardDef> cardCatalog();
 const CardDef* findCard(int defId);
+
+// v0.9 #153: localized description (falls back to EN when no TR text).
+const char* cardDescription(const CardDef& def);
+
+// --- v0.9 #148/#149: data-driven catalog ---
+// Replace the catalog from a JSON file/text. Returns false (and keeps the current
+// catalog) when the data is missing or clearly broken (< 10 valid cards).
+bool cardsLoadJsonFile(const char* path);
+bool cardsLoadJsonText(const char* json);
+// Restore the compiled-in catalog (tests / hot-reload fallback).
+void cardsResetBuiltins();
+// Write the current catalog as cards.json (bootstraps the data file).
+bool cardsExportJson(const char* path);
+// Debug hot-reload: re-load when the file's mtime changed. Returns true on reload.
+bool cardsReloadIfChanged(const char* path);
 
 // Build a shuffled starter deck for one player. Mode picks the recipe (Quick Duel = 15 cards);
 // the player's tower injects a signature card and deck-builder bans/extras apply (#41, #47).

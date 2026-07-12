@@ -22,6 +22,12 @@ int main()
 	int winsByTower[2] = {}; // 0 MG, 1 Sniper
 	int tooLong = 0;
 
+	// v0.9 #150: per-trial CSV for the balance dashboard.
+	FILE* csv = std::fopen("balance_report.csv", "wb");
+	if (csv) {
+		std::fprintf(csv, "trial,seed,map,turns,winnerSeat,winnerTower,worldEvents\n");
+	}
+
 	for (int t = 0; t < kTrials; ++t) {
 		MatchConfig cfg;
 		cfg.playerCount = 4;
@@ -59,6 +65,9 @@ int main()
 
 		if (m.phase != Phase::GameOver) {
 			++tooLong;
+			if (csv) {
+				std::fprintf(csv, "%d,%u,%s,%d,-1,timeout,0\n", t, cfg.seed, mapName(cfg.mapId), m.turnNumber);
+			}
 			continue;
 		}
 		++finished;
@@ -70,6 +79,15 @@ int main()
 			const TowerType tw = m.players[static_cast<size_t>(sum.winner)].tower;
 			++winsByTower[tw == TowerType::Sniper ? 1 : 0];
 		}
+		if (csv) {
+			std::fprintf(csv, "%d,%u,%s,%d,%d,%s,%d\n", t, cfg.seed, mapName(cfg.mapId), sum.turns, sum.winner,
+						 sum.winner >= 0 ? towerTypeName(m.players[static_cast<size_t>(sum.winner)].tower) : "draw",
+						 sum.worldEvents);
+		}
+	}
+	if (csv) {
+		std::fclose(csv);
+		std::printf("CSV written: balance_report.csv\n");
 	}
 
 	std::printf("=== Toy Soldiers M5 Balance Report ===\n");

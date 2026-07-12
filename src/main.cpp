@@ -1,8 +1,11 @@
+#include "app/audio.h"
 #include "app/crash_handler.h"
 #include "app/i18n.h"
 #include "app/session_log.h"
 #include "app/settings.h"
+#include "game/cards.h"
 #include "game/cosmetics.h"
+#include "game/events.h"
 #include "game/match.h"
 #include "net/session.h"
 #include "physics/table_scene.h"
@@ -36,10 +39,22 @@ bool g_fullscreen = false;
 // v0.7 juice + timer state
 float g_turnTimerAccum = 0.0f;
 int g_lastTurnForTimer = -1;
-uint32_t g_lastFxSync = 0;
 float g_slowMoTimer = 0.0f;  // #74
 float g_punchTimer = 0.0f;   // #75
 int g_lastParadeTurn = -1;   // #76
+// v0.9 delta trackers (idempotent across sync rebroadcasts) + juice
+float g_appTime = 0.0f;
+int g_fxLastHp[toy::kMaxPlayers] = { -1, -1, -1, -1 };
+int g_fxLastShield[toy::kMaxPlayers] = { 0, 0, 0, 0 };
+bool g_fxLastElim[toy::kMaxPlayers] = {};
+size_t g_fxLastDiscard = 0;
+size_t g_fxLastHand = 0;
+int g_fxLastActive = -1;
+toy::EventKind g_fxLastWorld = toy::EventKind::None;
+uint32_t g_fxWinMatchId = 0;
+uint32_t g_fxTrackedMatchId = 0;
+float g_flyTimer = 0.0f; // #129 intro fly-over
+float g_cardsReloadPoll = 0.0f;
 
 void rebuildScene()
 {
@@ -215,6 +230,15 @@ void init()
 	toy::crashHandlerInstall();
 	toy::sessionLog("INFO", "app init");
 
+	// v0.9 #130: procedural audio (fail-open — game runs silent if no device).
+	if (!toy::audioInit()) {
+		toy::sessionLog("WARN", "audio init failed — running silent");
+	}
+	// v0.9 #148: optional JSON card catalog next to the exe/working dir.
+	if (toy::cardsLoadJsonFile("data/cards.json")) {
+		toy::sessionLog("INFO", "card catalog loaded from data/cards.json");
+	}
+
 	toy::uiInit();
 	g_draw.init();
 
@@ -303,6 +327,12 @@ void frame()
 		g_ui.screen = toy::AppScreen::Results;
 		g_ui.timelineIndex = g_match.log.empty() ? -1 : static_cast<int>(g_match.log.size()) - 1;
 		toy::sessionLogf("INFO", "game over winner=%d turns=%d", g_match.winner, g_match.turnNumber);
+		// v0.9 #146: local unlock track — a win is "your seat won" (seat 0 in hotseat).
+		const int mySeat = (g_session.mode() == toy::AppMode::Offline) ? 0 : g_session.localSeat();
+		if (g_match.winner >= 0 && g_match.winner == mySeat) {
+			++g_ui.wins;
+			g_ui.settingsDirty = true;
+		}
 	}
 
 	// v0.7 #56: turn timer (authority enforces; client display approximates).
@@ -325,24 +355,101 @@ void frame()
 		g_turnTimerAccum = 0.0f;
 	}
 
-	// v0.7 #74/#75: slow-mo on tower destroy, camera punch on big hits (off in reduced motion).
-	if (g_match.syncGeneration != g_lastFxSync) {
-		g_lastFxSync = g_match.syncGeneration;
-		if (!g_ui.reducedMotion) {
-			const int n = static_cast<int>(g_match.log.size());
-			for (int i = n - 1; i >= 0 && i >= n - 8; --i) {
-				const toy::MatchEvent& ev = g_match.log[static_cast<size_t>(i)];
-				if (ev.type == toy::MatchEvent::Type::TurnStart) {
-					break;
+	// v0.7 #74/#75 + v0.9 audio: state-delta FX (idempotent across snapshot rebroadcasts).
+	g_appTime += static_cast<float>(dt);
+	{
+		// New match: rebase trackers silently (no sounds for the reset).
+		if (g_match.matchId != g_fxTrackedMatchId) {
+			g_fxTrackedMatchId = g_match.matchId;
+			size_t discards = 0, hands = 0;
+			for (int i = 0; i < g_match.config.playerCount; ++i) {
+				const toy::Player& p = g_match.players[static_cast<size_t>(i)];
+				g_fxLastHp[i] = p.towerHp;
+				g_fxLastShield[i] = p.shieldTurns;
+				g_fxLastElim[i] = p.eliminated;
+				discards += p.discard.size();
+				hands += p.hand.size();
+			}
+			g_fxLastDiscard = discards;
+			g_fxLastHand = hands;
+			g_fxLastActive = g_match.activePlayer;
+			g_fxLastWorld = g_match.world.kind;
+			// #129: intro fly-over on match start.
+			if (g_match.phase == toy::Phase::Playing && !g_ui.reducedMotion) {
+				g_flyTimer = 1.2f;
+			}
+		} else if (g_match.phase == toy::Phase::Playing || g_match.phase == toy::Phase::GameOver) {
+			size_t discards = 0, hands = 0;
+			for (int i = 0; i < g_match.config.playerCount; ++i) {
+				const toy::Player& p = g_match.players[static_cast<size_t>(i)];
+				if (g_fxLastHp[i] >= 0 && p.towerHp < g_fxLastHp[i]) {
+					const int dmg = g_fxLastHp[i] - p.towerHp;
+					toy::sfxPlay(dmg >= 5 ? toy::Sfx::BigDamage : toy::Sfx::Damage);
+					if (dmg >= 5 && !g_ui.reducedMotion) {
+						g_punchTimer = 0.18f; // #75
+					}
 				}
-				if (ev.type == toy::MatchEvent::Type::PlayerEliminated) {
-					g_slowMoTimer = 0.35f;
-				} else if (ev.type == toy::MatchEvent::Type::Damage && ev.value >= 5) {
-					g_punchTimer = 0.18f;
+				if (p.shieldTurns > g_fxLastShield[i]) {
+					toy::sfxPlay(toy::Sfx::Shield);
 				}
+				if (p.eliminated && !g_fxLastElim[i]) {
+					toy::sfxPlay(toy::Sfx::TowerDestroy);
+					if (!g_ui.reducedMotion) {
+						g_slowMoTimer = 0.35f; // #74
+					}
+				}
+				g_fxLastHp[i] = p.towerHp;
+				g_fxLastShield[i] = p.shieldTurns;
+				g_fxLastElim[i] = p.eliminated;
+				discards += p.discard.size();
+				hands += p.hand.size();
+			}
+			if (discards > g_fxLastDiscard) {
+				toy::sfxPlay(toy::Sfx::CardPlay);
+			}
+			if (hands > g_fxLastHand) {
+				toy::sfxPlay(toy::Sfx::Draw);
+			}
+			g_fxLastDiscard = discards;
+			g_fxLastHand = hands;
+			if (g_match.activePlayer != g_fxLastActive) {
+				g_fxLastActive = g_match.activePlayer;
+				if (g_match.phase == toy::Phase::Playing && g_session.canLocalAct(g_match)) {
+					toy::sfxPlay(toy::Sfx::YourTurn); // #131 chime
+				}
+			}
+			if (g_match.world.kind != g_fxLastWorld) {
+				g_fxLastWorld = g_match.world.kind;
+				toy::sfxEventStinger(g_match.world.kind); // #132
+			}
+			if (g_match.phase == toy::Phase::GameOver && g_fxWinMatchId != g_match.matchId) {
+				g_fxWinMatchId = g_match.matchId;
+				toy::sfxPlay(toy::Sfx::Win);
 			}
 		}
 	}
+
+	// v0.9 #134: live volumes; #133 music routing per screen.
+	toy::audioSetVolumes(g_ui.masterVolume, g_ui.sfxVolume, g_ui.musicVolume);
+	if (g_ui.screen == toy::AppScreen::Match || g_ui.screen == toy::AppScreen::Lobby) {
+		toy::musicPlay(g_match.phase == toy::Phase::Playing ? toy::MusicTrack::Match : toy::MusicTrack::Menu);
+	} else if (g_ui.screen == toy::AppScreen::Results) {
+		toy::musicPlay(toy::MusicTrack::ResultsSting);
+	} else {
+		toy::musicPlay(toy::MusicTrack::Menu);
+	}
+
+#ifndef NDEBUG
+	// v0.9 #149: Debug hot-reload of data/cards.json (poll every 2s, lobby/menu only).
+	g_cardsReloadPoll -= static_cast<float>(dt);
+	if (g_cardsReloadPoll <= 0.0f) {
+		g_cardsReloadPoll = 2.0f;
+		if (g_match.phase != toy::Phase::Playing && toy::cardsReloadIfChanged("data/cards.json")) {
+			toy::uiPushToast(g_ui, "cards.json reloaded", 2.0f);
+			toy::sessionLog("INFO", "cards.json hot-reloaded");
+		}
+	}
+#endif
 
 	const bool in3d = (g_ui.screen == toy::AppScreen::Lobby || g_ui.screen == toy::AppScreen::Match ||
 					   g_ui.screen == toy::AppScreen::Results) &&
@@ -369,15 +476,25 @@ void frame()
 		}
 		g_scene.step(stepDt);
 		g_scene.syncFromMatch(g_match);
+		g_scene.updateFx(g_match, static_cast<float>(dt)); // v0.9 particles/flashes (#125/#127/#128)
 	}
 
-	// #75: camera punch — temporary zoom-in restored after drawing.
+	// #75 camera punch + #129 intro fly-over — temporary offsets restored after drawing.
 	float punchOffset = 0.0f;
 	if (g_punchTimer > 0.0f) {
 		g_punchTimer -= static_cast<float>(dt);
 		punchOffset = -0.22f * (g_punchTimer / 0.18f);
 	}
-	g_camera.distance += punchOffset;
+	float flyOffset = 0.0f;
+	float flyYaw = 0.0f;
+	if (g_flyTimer > 0.0f) {
+		g_flyTimer -= static_cast<float>(dt);
+		const float t = g_flyTimer / 1.2f; // 1 → 0
+		flyOffset = 3.6f * t * t;          // start high & far, ease in
+		flyYaw = 1.6f * t;
+	}
+	g_camera.distance += punchOffset + flyOffset;
+	g_camera.yaw += flyYaw;
 
 	float cr = 0.07f, cg = 0.09f, cb = 0.14f;
 	if (in3d) {
@@ -389,7 +506,22 @@ void frame()
 	}
 	g_draw.begin(w, h, g_camera, cr, cg, cb);
 	if (in3d) {
-		g_draw.drawScene(g_scene);
+		// v0.9 render juice (#121/#124/#128).
+		toy::RenderFx fx;
+		fx.time = g_appTime;
+		fx.reducedMotion = g_ui.reducedMotion;
+		fx.activeSeat = (g_match.phase == toy::Phase::Playing) ? g_match.activePlayer : -1;
+		fx.winnerSeat = (g_match.phase == toy::Phase::GameOver) ? g_match.winner : -1;
+		fx.outlineSeat = (g_ui.screen == toy::AppScreen::Match && g_match.phase == toy::Phase::Playing &&
+						  g_ui.selectedTarget >= 0 && g_ui.selectedTarget < g_match.config.playerCount)
+							 ? g_ui.selectedTarget
+							 : -1;
+		float sr, sg2, sb;
+		toy::mapTableColor(g_match.config.mapId, sr, sg2, sb);
+		fx.shadowR = sr * 0.45f;
+		fx.shadowG = sg2 * 0.45f;
+		fx.shadowB = sb * 0.45f;
+		g_draw.drawScene(g_scene, fx);
 	}
 	sg_end_pass();
 
@@ -405,7 +537,8 @@ void frame()
 		sg_end_pass();
 	}
 	sg_commit();
-	g_camera.distance -= punchOffset; // restore after #75 punch
+	g_camera.distance -= punchOffset + flyOffset; // restore after #75 punch / #129 fly-over
+	g_camera.yaw -= flyYaw;
 
 	if (g_ui.settingsDirty && (g_ui.screen == toy::AppScreen::Menu || g_ui.screen == toy::AppScreen::Settings)) {
 		saveSettingsIfDirty();
@@ -415,6 +548,10 @@ void frame()
 void event(const sapp_event* e)
 {
 	toy::uiEvent(e);
+	// v0.9 #131: soft UI click whenever the cursor presses inside ImGui.
+	if (e->type == SAPP_EVENTTYPE_MOUSE_DOWN && toy::uiWantsMouse()) {
+		toy::sfxPlay(toy::Sfx::UiClick);
+	}
 	if (toy::uiWantsMouse() &&
 		(e->type == SAPP_EVENTTYPE_MOUSE_DOWN || e->type == SAPP_EVENTTYPE_MOUSE_UP ||
 		 e->type == SAPP_EVENTTYPE_MOUSE_MOVE || e->type == SAPP_EVENTTYPE_MOUSE_SCROLL)) {
@@ -480,6 +617,7 @@ void event(const sapp_event* e)
 		} else if (e->key_code == SAPP_KEYCODE_ENTER || e->key_code == SAPP_KEYCODE_KP_ENTER) {
 			if (g_ui.screen == toy::AppScreen::Match && g_match.phase == toy::Phase::Playing) {
 				if (!g_session.requestPlayCard(g_match, g_ui.selectedHand, g_ui.selectedTarget)) {
+					toy::sfxPlay(toy::Sfx::IllegalBuzz); // #131
 					const char* err = g_session.lastError();
 					if (err && err[0]) {
 						toy::uiPushToast(g_ui, err, 2.8f);
@@ -515,6 +653,7 @@ void cleanup()
 	g_discovery.stop();
 	g_session.shutdown(&g_match);
 	destroyScene();
+	toy::audioShutdown();
 	toy::uiShutdown();
 	sg_shutdown();
 }
@@ -537,7 +676,7 @@ sapp_desc sokol_main(int /*argc*/, char* /*argv*/[])
 	d.sample_count = 4;
 	d.fullscreen = hasSettings ? early.fullscreen : false;
 	d.swap_interval = (hasSettings && !early.vsync) ? 0 : 1;
-	d.window_title = "Oyuncak Asker Masa Savasi — v0.8 Reliable Party";
+	d.window_title = "Oyuncak Asker Masa Savasi — v0.9 Identity & Content";
 	d.logger.func = slog_func;
 	d.high_dpi = true;
 	return d;

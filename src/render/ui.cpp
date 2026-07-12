@@ -97,6 +97,9 @@ void uiApplySettings(UiState& ui, const Settings& s)
 	ui.reducedMotion = s.reducedMotion;
 	ui.coachTips = s.coachTips;
 	ui.matchesCompleted = s.matchesCompleted;
+	ui.wins = s.wins;
+	ui.sfxVolume = s.sfxVolume;
+	ui.musicVolume = s.musicVolume;
 	for (int i = 0; i < Settings::kRecentHostMax; ++i) {
 		std::snprintf(ui.recentHosts[i], sizeof(ui.recentHosts[i]), "%s", s.recentHosts[i]);
 	}
@@ -134,6 +137,9 @@ void uiCaptureSettings(const UiState& ui, Settings& s)
 	s.reducedMotion = ui.reducedMotion;
 	s.coachTips = ui.coachTips;
 	s.matchesCompleted = ui.matchesCompleted;
+	s.wins = ui.wins;
+	s.sfxVolume = ui.sfxVolume;
+	s.musicVolume = ui.musicVolume;
 	for (int i = 0; i < Settings::kRecentHostMax; ++i) {
 		std::snprintf(s.recentHosts[i], sizeof(s.recentHosts[i]), "%s", ui.recentHosts[i]);
 	}
@@ -380,7 +386,7 @@ void drawLoadoutEditors(Match& match, NetSession& session, UiState& ui, int seat
 	}
 	Player& me = match.players[static_cast<size_t>(seat)];
 	// v0.7 #38: tower pick with stats comparison, #40 passive tooltips.
-	ImGui::TextUnformatted("Tower type (gameplay):");
+	ImGui::TextUnformatted(tr("lobby.tower_type"));
 	if (ImGui::BeginTable("##towers", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_SizingStretchProp)) {
 		ImGui::TableSetupColumn("Tower");
 		ImGui::TableSetupColumn("HP");
@@ -456,26 +462,82 @@ void drawLoadoutEditors(Match& match, NetSession& session, UiState& ui, int seat
 	ui.towerSkinIndex = static_cast<int>(me.cosmetics.towerSkin);
 	ui.accessoryIndex = static_cast<int>(me.cosmetics.accessory);
 
-	const char* colorNames[16] = {};
-	const char* skinNames[8] = {};
-	const char* accNames[8] = {};
-	const int nc = plasticColorCount();
-	const int ns = towerSkinCount();
-	const int na = accessoryCount();
-	for (int i = 0; i < nc; ++i) {
-		colorNames[i] = plasticColorName(static_cast<PlasticColor>(i));
-	}
-	for (int i = 0; i < ns; ++i) {
-		skinNames[i] = towerSkinName(static_cast<TowerSkin>(i));
-	}
-	for (int i = 0; i < na; ++i) {
-		accNames[i] = accessoryName(static_cast<Accessory>(i));
+	// v0.9 #146: locked items visible but unselectable, with the unlock rule shown.
+	bool cosChanged = false;
+	auto lockedCombo = [&](const char* label, int& index, int count, auto nameFn, auto unlockedFn, auto ruleFn) {
+		char preview[96];
+		std::snprintf(preview, sizeof(preview), "%s", nameFn(index));
+		bool changed = false;
+		if (ImGui::BeginCombo(label, preview)) {
+			for (int i = 0; i < count; ++i) {
+				const bool unlocked = unlockedFn(i, ui.matchesCompleted, ui.wins);
+				char item[128];
+				if (unlocked) {
+					std::snprintf(item, sizeof(item), "%s##%s%d", nameFn(i), label, i);
+				} else {
+					char req[48];
+					ruleFn(i, req, static_cast<int>(sizeof(req)));
+					std::snprintf(item, sizeof(item), "%s  (locked: %s)##%s%d", nameFn(i), req, label, i);
+				}
+				if (!unlocked) {
+					ImGui::BeginDisabled();
+				}
+				if (ImGui::Selectable(item, index == i)) {
+					index = i;
+					changed = true;
+				}
+				if (!unlocked) {
+					ImGui::EndDisabled();
+				}
+			}
+			ImGui::EndCombo();
+		}
+		return changed;
+	};
+
+	cosChanged |= lockedCombo(
+		"Plastic color", ui.plasticIndex, plasticColorCount(),
+		[](int i) { return plasticColorName(static_cast<PlasticColor>(i)); },
+		[](int i, int m, int w) { return plasticUnlocked(static_cast<PlasticColor>(i), m, w); },
+		[](int i, char* out, int cap) { plasticUnlockText(static_cast<PlasticColor>(i), out, cap); });
+	cosChanged |= lockedCombo(
+		"Tower skin", ui.towerSkinIndex, towerSkinCount(),
+		[](int i) { return towerSkinName(static_cast<TowerSkin>(i)); },
+		[](int i, int m, int w) { return towerSkinUnlocked(static_cast<TowerSkin>(i), m, w); },
+		[](int i, char* out, int cap) { towerSkinUnlockText(static_cast<TowerSkin>(i), out, cap); });
+	cosChanged |= lockedCombo(
+		"Accessory", ui.accessoryIndex, accessoryCount(),
+		[](int i) { return accessoryName(static_cast<Accessory>(i)); },
+		[](int i, int m, int w) { return accessoryUnlocked(static_cast<Accessory>(i), m, w); },
+		[](int i, char* out, int cap) { accessoryUnlockText(static_cast<Accessory>(i), out, cap); });
+
+	// v0.9 #145: one-click themed sets.
+	if (ImGui::TreeNode("Cosmetic sets")) {
+		for (int si = 0; si < cosmeticSetCount(); ++si) {
+			const CosmeticSet& set = cosmeticSet(si);
+			const bool unlocked = cosmeticSetUnlocked(si, ui.matchesCompleted, ui.wins);
+			char label[96];
+			std::snprintf(label, sizeof(label), "%s%s##set%d", set.name, unlocked ? "" : " (locked)", si);
+			if (!unlocked) {
+				ImGui::BeginDisabled();
+			}
+			if (ImGui::SmallButton(label)) {
+				ui.plasticIndex = static_cast<int>(set.plastic);
+				ui.towerSkinIndex = static_cast<int>(set.towerSkin);
+				ui.accessoryIndex = static_cast<int>(set.accessory);
+				cosChanged = true;
+			}
+			if (!unlocked) {
+				ImGui::EndDisabled();
+			}
+			if (ImGui::IsItemHovered()) {
+				ImGui::SetTooltip("%s + %s + %s", plasticColorName(set.plastic), towerSkinName(set.towerSkin),
+								  accessoryName(set.accessory));
+			}
+		}
+		ImGui::TreePop();
 	}
 
-	bool cosChanged = false;
-	cosChanged |= ImGui::Combo("Plastic color", &ui.plasticIndex, colorNames, nc);
-	cosChanged |= ImGui::Combo("Tower skin", &ui.towerSkinIndex, skinNames, ns);
-	cosChanged |= ImGui::Combo("Accessory", &ui.accessoryIndex, accNames, na);
 	if (cosChanged) {
 		Cosmetics cos;
 		cos.plastic = static_cast<PlasticColor>(ui.plasticIndex);
@@ -500,7 +562,7 @@ void drawMenuV2(LanDiscovery& discovery, UiState& ui)
 				 ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize);
 
 	ImGui::TextColored(ImVec4(0.96f, 0.77f, 0.36f, 1.0f), "%s", tr("app.title"));
-	ImGui::TextDisabled("v0.8 Reliable Party  ·  protocol %u", static_cast<unsigned>(kProtocolVersion));
+	ImGui::TextDisabled("v0.9 Identity & Content  ·  protocol %u", static_cast<unsigned>(kProtocolVersion));
 	ImGui::Separator();
 
 	ImGui::InputText(tr("menu.display_name"), ui.playerName, sizeof(ui.playerName));
@@ -648,7 +710,7 @@ void drawMenuV2(LanDiscovery& discovery, UiState& ui)
 	ImGui::Separator();
 	ImGui::SetNextItemWidth(120);
 	ImGui::InputInt("Host listen port", &ui.hostPort);
-	ImGui::Checkbox("Fill empty seats with AI", &ui.fillAI);
+	ImGui::Checkbox(tr("lobby.fill_ai"), &ui.fillAI);
 
 	ImGui::Separator();
 	if (ImGui::Button(tr("menu.settings"), ImVec2(-1, 32))) {
@@ -678,7 +740,7 @@ void drawCredits(UiState& ui)
 	ImGui::Begin(tr("credits.title"), nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse);
 
 	ImGui::TextColored(ImVec4(0.96f, 0.77f, 0.36f, 1.0f), "%s", tr("app.title"));
-	ImGui::TextDisabled("v0.8 Reliable Party");
+	ImGui::TextDisabled("v0.9 Identity & Content");
 	ImGui::Separator();
 	ImGui::TextUnformatted("Game");
 	ImGui::BulletText("Design & code — preunec / cagatay-softgineer");
@@ -746,7 +808,7 @@ void drawCodex(UiState& ui)
 			appendCardKeywords(def, kw, sizeof(kw));
 			ImGui::TextUnformatted(kw);
 			ImGui::TableNextColumn();
-			ImGui::TextWrapped("%s", def.description);
+			ImGui::TextWrapped("%s", cardDescription(def));
 		}
 		ImGui::EndTable();
 	}
@@ -867,7 +929,16 @@ void drawSettings(UiState& ui)
 	if (ui.reducedMotion && ui.autoOrbit) {
 		ui.autoOrbit = false;
 	}
-	ImGui::SliderFloat("Master volume (placeholder)", &ui.masterVolume, 0.0f, 1.0f);
+	// v0.9 #134: real per-category volumes.
+	if (ImGui::SliderFloat(tr("settings.master_vol"), &ui.masterVolume, 0.0f, 1.0f)) {
+		ui.settingsDirty = true;
+	}
+	if (ImGui::SliderFloat(tr("settings.sfx_vol"), &ui.sfxVolume, 0.0f, 1.0f)) {
+		ui.settingsDirty = true;
+	}
+	if (ImGui::SliderFloat(tr("settings.music_vol"), &ui.musicVolume, 0.0f, 1.0f)) {
+		ui.settingsDirty = true;
+	}
 	if (ImGui::Checkbox(tr("settings.reduced_motion"), &ui.reducedMotion)) {
 		if (ui.reducedMotion) {
 			ui.autoOrbit = false;
@@ -1066,15 +1137,21 @@ void drawLobbyScreen(Match& match, NetSession& session, UiState& ui)
 		ImGui::Separator();
 		ImGui::TextUnformatted("Map");
 		ui.mapIndex = static_cast<int>(match.config.mapId);
-		const char* maps[] = { "Living Room Table", "Desert Playmat", "Backyard Picnic" };
-		if (ImGui::Combo("##map", &ui.mapIndex, maps, 3)) {
+		// v0.9 #136-#139: all 7 rooms.
+		const char* maps[static_cast<int>(MapId::Count)];
+		for (int mi = 0; mi < static_cast<int>(MapId::Count); ++mi) {
+			maps[mi] = mapName(static_cast<MapId>(mi));
+		}
+		if (ImGui::Combo("##map", &ui.mapIndex, maps, static_cast<int>(MapId::Count))) {
 			match.config.mapId = static_cast<MapId>(ui.mapIndex);
 			if (session.mode() == AppMode::Host) {
 				session.hostPushState(match);
 			}
 			ui.settingsDirty = true;
 		}
-		if (ImGui::Checkbox("World events", &ui.eventsEnabled)) {
+		// #140/#156: loading blurb with recommended events.
+		ImGui::TextDisabled("%s", mapBlurb(match.config.mapId));
+		if (ImGui::Checkbox(tr("lobby.world_events"), &ui.eventsEnabled)) {
 			match.config.eventsEnabled = ui.eventsEnabled;
 			if (session.mode() == AppMode::Host) {
 				session.hostPushState(match);
@@ -1130,7 +1207,7 @@ void drawLobbyScreen(Match& match, NetSession& session, UiState& ui)
 			}
 		}
 		if (session.mode() == AppMode::Host) {
-			ImGui::Checkbox("Fill empty with AI", &ui.fillAI);
+			ImGui::Checkbox(tr("lobby.fill_ai"), &ui.fillAI);
 			match.config.fillEmptyWithAI = ui.fillAI;
 			// #80: every seated human must be ready before start.
 			bool allReady = true;
@@ -1144,7 +1221,7 @@ void drawLobbyScreen(Match& match, NetSession& session, UiState& ui)
 			if (!allReady) {
 				ImGui::BeginDisabled();
 			}
-			if (ImGui::Button("Start Match", ImVec2(-1, 40))) {
+			if (ImGui::Button(tr("lobby.start"), ImVec2(-1, 40))) {
 				if (session.hostStartMatch(match)) {
 					ui.screen = AppScreen::Match;
 				} else if (session.lastError()[0]) {
@@ -1160,7 +1237,7 @@ void drawLobbyScreen(Match& match, NetSession& session, UiState& ui)
 	}
 
 	if (session.mode() == AppMode::Offline && match.phase == Phase::Lobby) {
-		if (ImGui::Button("Start Offline Match", ImVec2(-1, 40))) {
+		if (ImGui::Button(tr("lobby.start_offline"), ImVec2(-1, 40))) {
 			// main will start offline if needed; if already offline lobby empty, request via intent
 			ui.selectedHand = -5; // start offline match from lobby
 		}
@@ -1175,7 +1252,7 @@ void drawLobbyScreen(Match& match, NetSession& session, UiState& ui)
 
 	if (session.mode() == AppMode::Client && match.phase == Phase::Lobby && session.localSeat() >= 0) {
 		bool ready = match.players[static_cast<size_t>(session.localSeat())].ready;
-		if (ImGui::Checkbox("Ready", &ready)) {
+		if (ImGui::Checkbox(tr("lobby.ready"), &ready)) {
 			session.requestReady(match, ready);
 		}
 	}
@@ -1224,7 +1301,7 @@ void drawLobbyScreen(Match& match, NetSession& session, UiState& ui)
 	}
 
 	ImGui::Separator();
-	if (ImGui::Button("Leave to Menu", ImVec2(-1, 28))) {
+	if (ImGui::Button(tr("lobby.leave"), ImVec2(-1, 28))) {
 		ui.selectedHand = -6; // disconnect intent
 		ui.screen = AppScreen::Menu;
 	}
@@ -1274,16 +1351,16 @@ void drawMatchHud(Match& match, NetSession& session, UiState& ui)
 	}
 
 	if (session.mode() == AppMode::Offline) {
-		if (ImGui::Button("Auto Play")) {
+		if (ImGui::Button(tr("match.auto"))) {
 			autoPlayBest(match);
 			bumpSync(match);
 		}
 		ImGui::SameLine();
-		if (ImGui::Button("End Turn")) {
+		if (ImGui::Button(tr("match.end_turn"))) {
 			session.requestEndTurn(match);
 		}
 	}
-	if (ImGui::Button("Pause / Menu")) {
+	if (ImGui::Button(tr("match.pause"))) {
 		ui.pauseOpen = true;
 	}
 	ImGui::SameLine();
@@ -1426,7 +1503,7 @@ void drawMatchHud(Match& match, NetSession& session, UiState& ui)
 				}
 			}
 
-			ImGui::Text("Target:");
+			ImGui::TextUnformatted(tr("match.target"));
 			const bool fogTargets = eventHidesHp(match);
 			const CardDef* selDef =
 				(ui.selectedHand >= 0 && ui.selectedHand < static_cast<int>(hp.hand.size()))
@@ -1490,7 +1567,7 @@ void drawMatchHud(Match& match, NetSession& session, UiState& ui)
 					const int preview = computeAttackDamage(match, match.activePlayer, ui.selectedTarget, *def);
 					std::snprintf(btn, sizeof(btn), "[%s] %s\n~%d dmg", cardClassName(def->klass), def->name, preview);
 				} else {
-					std::snprintf(btn, sizeof(btn), "[%s] %s\n%s", cardClassName(def->klass), def->name, def->description);
+					std::snprintf(btn, sizeof(btn), "[%s] %s\n%s", cardClassName(def->klass), def->name, cardDescription(*def));
 				}
 				if (ImGui::Button(btn, ImVec2(170, 72))) {
 					ui.selectedHand = h;
@@ -1502,7 +1579,7 @@ void drawMatchHud(Match& match, NetSession& session, UiState& ui)
 					ImGui::TextUnformatted(def->name);
 					ImGui::TextColored(ImVec4(0.7f, 0.85f, 1.0f, 1.0f), "%s", kw);
 					ImGui::Separator();
-					ImGui::TextWrapped("%s", def->description);
+					ImGui::TextWrapped("%s", cardDescription(*def));
 					ImGui::EndTooltip();
 				}
 				ImGui::PopStyleColor();
@@ -1518,7 +1595,7 @@ void drawMatchHud(Match& match, NetSession& session, UiState& ui)
 			if (!can) {
 				ImGui::BeginDisabled();
 			}
-			if (ImGui::Button("Play Selected Card", ImVec2(200, 36))) {
+			if (ImGui::Button(tr("match.play"), ImVec2(200, 36))) {
 				if (!session.requestPlayCard(match, ui.selectedHand, ui.selectedTarget)) {
 					const char* err = session.lastError();
 					if (err && err[0]) {

@@ -64,7 +64,7 @@ toy::EventKind g_fxLastWorld = toy::EventKind::None;
 uint32_t g_fxWinMatchId = 0;
 uint32_t g_fxTrackedMatchId = 0;
 float g_flyTimer = 0.0f; // #129 intro fly-over
-float g_cardsReloadPoll = 0.0f;
+[[maybe_unused]] float g_cardsReloadPoll = 0.0f; // only read in Debug builds (#149)
 // v1.0
 bool g_tutorialMatch = false; // #168: current offline match is the guided tutorial
 bool g_photoMode = false;     // #187: P key — freeze sim (offline) + hide UI

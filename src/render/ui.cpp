@@ -1653,7 +1653,7 @@ void drawMatchHud(Match& match, NetSession& session, UiState& ui)
 		if (hideThis) {
 			ImGui::ProgressBar(1.0f, ImVec2(-1, 0), "??");
 			ImGui::SameLine(0, 8);
-			ImGui::TextDisabled("??/??");
+			ImGui::TextDisabled("?\?/?\?"); // escaped: "??/" is a trigraph to GCC
 		} else {
 			ImGui::ProgressBar(p.towerMaxHp > 0 ? static_cast<float>(p.towerHp) / static_cast<float>(p.towerMaxHp)
 												: 0.f,
@@ -1751,7 +1751,7 @@ void drawMatchHud(Match& match, NetSession& session, UiState& ui)
 				ImGui::SameLine();
 				char label[48];
 				if (fogTargets) {
-					std::snprintf(label, sizeof(label), "%s (??)%s##tgt", tp.name, tp.shieldTurns > 0 ? " shd" : "");
+					std::snprintf(label, sizeof(label), "%s (?\?)%s##tgt", tp.name, tp.shieldTurns > 0 ? " shd" : "");
 				} else {
 					std::snprintf(label, sizeof(label), "%s (%d)%s##tgt", tp.name, tp.towerHp,
 								  tp.shieldTurns > 0 ? " shd" : "");

@@ -89,7 +89,7 @@ else()
 	find_package(OpenGL REQUIRED)
 	find_package(Threads REQUIRED)
 	find_package(X11 REQUIRED)
-	target_link_libraries(sokol INTERFACE OpenGL::GL Threads::Threads X11 Xcursor Xi)
+	target_link_libraries(sokol INTERFACE OpenGL::GL Threads::Threads X11 Xcursor Xi asound ${CMAKE_DL_LIBS})
 endif()
 
 # ---------------------------------------------------------------------------

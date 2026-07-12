@@ -36,6 +36,12 @@ std::vector<CardInstance> makeStarterDeck(int playerId, uint32_t& rngState, int&
 uint32_t xorshift32(uint32_t& state);
 int randRange(uint32_t& state, int lo, int hiInclusive);
 
+// v1.1 trust lines (#104/#105): FNV-1a fingerprints, logged so every client can compare.
+// Seed commit is logged at match start, revealed at game over (commit-reveal).
+uint32_t seedCommitHash(uint32_t seed);
+// Order-independent deck fingerprint (multiset of defIds).
+uint32_t deckCheckHash(const std::vector<CardInstance>& deck);
+
 void shuffleInPlace(std::vector<CardInstance>& cards, uint32_t& rngState);
 
 } // namespace toy

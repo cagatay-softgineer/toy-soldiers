@@ -46,6 +46,11 @@ public:
 	void paradeRest(const Match& match);
 	// v0.9: ambient/event particles, damage flashes, victory confetti. Call once per frame.
 	void updateFx(const Match& match, float dt);
+	// v1.1 #141: local felt dye (0 = map default, 1.. = dye presets). Display-only,
+	// never networked. Tabletop recolors live; baked patches follow on scene rebuild.
+	void setFeltDye(int dyeIndex) { feltDye_ = dyeIndex; }
+	static int feltDyeCount();
+	static const char* feltDyeName(int dyeIndex);
 
 	b3WorldId world() const { return worldId_; }
 	const std::vector<BodyVisual>& visuals() const { return visuals_; }
@@ -60,6 +65,7 @@ public:
 private:
 	void impulseSeat(int seat, float strength);
 	void spawnParticle(const FxParticle& p);
+	void resolvedTableColor(MapId map, float& r, float& g, float& b) const;
 	b3BodyId createStaticBox(b3Pos pos, float hx, float hy, float hz, b3Vec3 color, BodyVisual::Kind kind, int player);
 	b3BodyId createDynamicBox(b3Pos pos, float hx, float hy, float hz, float density, b3Vec3 color, BodyVisual::Kind kind,
 							  int player);
@@ -76,6 +82,7 @@ private:
 	std::array<int, kMaxPlayers> lastHp_{ -1, -1, -1, -1 };
 	std::array<float, kMaxPlayers> flashTimer_{};
 	uint32_t confettiMatchId_ = 0; // fired once per match (#128)
+	int feltDye_ = 0;              // v1.1 #141
 };
 
 } // namespace toy

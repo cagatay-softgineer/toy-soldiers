@@ -605,6 +605,7 @@ void frame()
 			g_lastParadeTurn = g_match.turnNumber;
 			g_scene.paradeRest(g_match);
 		}
+		g_scene.setFeltDye(g_ui.feltDyeIndex); // v1.1 #141 (local display only)
 		if (!g_photoMode) { // #187: photo mode freezes physics + particles
 			g_scene.consumeImpulse(g_match);
 			float stepDt = static_cast<float>(dt);

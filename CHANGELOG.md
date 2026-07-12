@@ -5,7 +5,32 @@ All notable changes to **Oyuncak Asker Masa Savaşı (toy-soldiers)** are docume
 ## [Unreleased]
 
 ### Planned
-- v1.0.1 hotfix buffer + v1.1 ideas — see [docs/RELEASE.md](docs/RELEASE.md)
+- v1.1.x — see the [v1.1 milestone](https://github.com/cagatay-softgineer/toy-soldiers/milestone/7)
+  and [docs/RELEASE.md](docs/RELEASE.md)
+
+## [1.1.0] — 2026-07-12 · "Encore"
+
+Issue-tracker sweep: every remaining roadmap item was audited — ~70 already-shipped
+issues closed with implementation notes, 16 genuinely-future items moved to the v1.1
+milestone with reasons, and the 9 finishable ones landed here. **No balance numbers
+changed** (v1.0 freeze holds).
+
+### Added
+- **Trust lines (#104/#105):** match start logs `Trust: seed commit <fnv> — deck check
+  0:<h> 1:<h>…` and game over reveals `Trust: seed was <seed>` — every client can verify
+  the host never swapped seeds or stacked decks (order-independent FNV-1a fingerprints,
+  covered by mode tests)
+- **Large battle-log text (#112):** stream-friendly 1.35× log font toggle in settings
+- **Felt dye (#141):** local-only table tint (Crimson / Royal Blue / Charcoal / Cream /
+  Mint) in settings — display-only, never networked
+- **Card-play arc (#126):** the last-played-card banner now arcs up from the hand area
+  (ease-out, skipped under reduced motion)
+- **Protocol reference (#116):** docs/PROTOCOL.md — framing, full message table, beacon
+  format, trust-line verification, Wireshark recipes
+- **Community templates:** card-proposal form mirroring the cards.json schema (#152) and
+  a playtest-feedback form (#178) as GitHub issue templates
+- **Linux verified in CI (#159):** new ubuntu job builds the full game (X11/GL/ALSA deps)
+  against the pinned Box3D and runs all 8 headless gates on every push
 
 ## [1.0.0] — 2026-07-12 · "Ship Toy Soldiers"
 

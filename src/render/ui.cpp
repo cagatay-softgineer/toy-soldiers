@@ -8,6 +8,7 @@
 #include "game/play_reason.h"
 #include "game/rules.h"
 #include "game/summary.h"
+#include "physics/table_scene.h" // v1.1 #141 felt dye names
 
 #include "imgui.h"
 #include "sokol_app.h"
@@ -107,6 +108,8 @@ void uiApplySettings(UiState& ui, const Settings& s)
 	for (int i = 0; i < 7; ++i) {
 		ui.mapPlays[i] = s.mapPlays[i];
 	}
+	ui.largeLogFont = s.largeLogFont;
+	ui.feltDyeIndex = s.feltDyeIndex;
 	for (int i = 0; i < Settings::kRecentHostMax; ++i) {
 		std::snprintf(ui.recentHosts[i], sizeof(ui.recentHosts[i]), "%s", s.recentHosts[i]);
 	}
@@ -153,6 +156,8 @@ void uiCaptureSettings(const UiState& ui, Settings& s)
 	for (int i = 0; i < 7; ++i) {
 		s.mapPlays[i] = ui.mapPlays[i];
 	}
+	s.largeLogFont = ui.largeLogFont;
+	s.feltDyeIndex = ui.feltDyeIndex;
 	for (int i = 0; i < Settings::kRecentHostMax; ++i) {
 		std::snprintf(s.recentHosts[i], sizeof(s.recentHosts[i]), "%s", ui.recentHosts[i]);
 	}
@@ -375,11 +380,25 @@ void drawToastsAndBanners(Match& match, UiState& ui)
 		ImGui::End();
 	}
 
-	// #49 last-played card, below the turn banner.
+	// #49 last-played card, below the turn banner — v1.1 #126: it now arcs up from
+	// the hand area to its resting slot instead of popping in.
 	if (ui.lastCardTimer > 0.0f && match.phase == Phase::Playing) {
 		ui.lastCardTimer -= dt;
-		ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + 136.0f), ImGuiCond_Always,
-								ImVec2(0.5f, 0.0f));
+		float y = vp->WorkPos.y + 136.0f;
+		float x = vp->WorkPos.x + vp->WorkSize.x * 0.5f;
+		if (!ui.reducedMotion) {
+			const float total = 2.0f;
+			const float flight = 0.35f;
+			const float elapsed = total - ui.lastCardTimer;
+			if (elapsed < flight) {
+				float t = elapsed / flight;
+				t = 1.0f - (1.0f - t) * (1.0f - t); // ease-out
+				const float startY = vp->WorkPos.y + vp->WorkSize.y - 270.0f; // hand area
+				y = startY + (vp->WorkPos.y + 136.0f - startY) * t;
+				x += (1.0f - t) * 40.0f; // slight sideways drift for the "arc" feel
+			}
+		}
+		ImGui::SetNextWindowPos(ImVec2(x, y), ImGuiCond_Always, ImVec2(0.5f, 0.0f));
 		ImGui::SetNextWindowBgAlpha(0.7f);
 		if (ImGui::Begin("##lastcard", nullptr,
 						 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoNav |
@@ -1121,6 +1140,27 @@ void drawSettings(UiState& ui)
 		ui.uiScalePercent = 150;
 	}
 	ImGui::Checkbox(tr("settings.high_contrast"), &ui.highContrast);
+	// v1.1 #112: Twitch-friendly battle log.
+	if (ImGui::Checkbox(tr("settings.large_log"), &ui.largeLogFont)) {
+		ui.settingsDirty = true;
+	}
+	// v1.1 #141: local felt dye (display only — other players see their own choice).
+	{
+		const int n = TableScene::feltDyeCount();
+		if (ui.feltDyeIndex < 0 || ui.feltDyeIndex >= n) {
+			ui.feltDyeIndex = 0;
+		}
+		if (ImGui::BeginCombo(tr("settings.felt_dye"), TableScene::feltDyeName(ui.feltDyeIndex))) {
+			for (int i = 0; i < n; ++i) {
+				if (ImGui::Selectable(TableScene::feltDyeName(i), ui.feltDyeIndex == i)) {
+					ui.feltDyeIndex = i;
+					ui.settingsDirty = true;
+				}
+			}
+			ImGui::EndCombo();
+		}
+		ImGui::TextDisabled("%s", tr("settings.felt_dye_hint"));
+	}
 
 	ImGui::Separator();
 	ImGui::Checkbox(tr("settings.fullscreen"), &ui.fullscreen);
@@ -1807,6 +1847,8 @@ void drawMatchHud(Match& match, NetSession& session, UiState& ui)
 	ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x - 360, vp->WorkPos.y + 220), ImGuiCond_FirstUseEver);
 	ImGui::SetNextWindowSize(ImVec2(348, 260), ImGuiCond_FirstUseEver);
 	ImGui::Begin("Battle Log");
+	// v1.1 #112: larger stream-readable log text.
+	ImGui::SetWindowFontScale(ui.largeLogFont ? 1.35f : 1.0f);
 	if (!match.log.empty()) {
 		const int n = static_cast<int>(match.log.size());
 		if (ui.timelineIndex < 0 || ui.timelineIndex >= n) {

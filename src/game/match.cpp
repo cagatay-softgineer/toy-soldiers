@@ -185,6 +185,22 @@ void startMatchFromLobby(Match& match)
 		// drawCards needs Playing phase + valid player — call after phase set
 	}
 
+	// v1.1 trust lines (#104/#105): deck fingerprints + seed commitment, visible to every
+	// client via the snapshot log. The seed itself is revealed at game over.
+	{
+		char tbuf[160];
+		int off = std::snprintf(tbuf, sizeof(tbuf), "Trust: seed commit %08x — deck check", seedCommitHash(match.config.seed));
+		for (int i = 0; i < match.config.playerCount && off > 0 && off < static_cast<int>(sizeof(tbuf)) - 12; ++i) {
+			const Player& p = match.players[static_cast<size_t>(i)];
+			if (p.control == SeatControl::Empty) {
+				continue;
+			}
+			off += std::snprintf(tbuf + off, sizeof(tbuf) - static_cast<size_t>(off), " %d:%04x", i,
+								 deckCheckHash(p.deck) & 0xFFFF);
+		}
+		pushInfo(match, tbuf);
+	}
+
 	// Hot Potato (#55): crown lands on a random occupied seat.
 	if (match.config.mode == GameMode::HotPotato) {
 		match.crownSeat = pickOccupiedSeat(match);

@@ -441,6 +441,11 @@ void evaluateEndState(Match& match)
 			} else {
 				pushEvent(match, MatchEvent::Type::Winner, -1, -1, 0, "Draw — both teams down.");
 			}
+			// v1.1 #105: seed reveal (see the FFA branch below for the commit line).
+			char rbuf[96];
+			std::snprintf(rbuf, sizeof(rbuf), "Trust: seed was %u (commit %08x).", match.config.seed,
+						  seedCommitHash(match.config.seed));
+			pushEvent(match, MatchEvent::Type::Info, -1, -1, 0, rbuf);
 		}
 		return;
 	}
@@ -461,6 +466,11 @@ void evaluateEndState(Match& match)
 		} else {
 			pushEvent(match, MatchEvent::Type::Winner, -1, -1, 0, "Draw — all towers down.");
 		}
+		// v1.1 #105: reveal the seed so clients can verify the match-start commitment.
+		char rbuf[96];
+		std::snprintf(rbuf, sizeof(rbuf), "Trust: seed was %u (commit %08x).", match.config.seed,
+					  seedCommitHash(match.config.seed));
+		pushEvent(match, MatchEvent::Type::Info, -1, -1, 0, rbuf);
 	}
 }
 

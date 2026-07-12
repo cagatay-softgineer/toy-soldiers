@@ -354,6 +354,36 @@ int main()
 		std::printf("OK snapshot v5 (%zu bytes)\n", bytes.size());
 	}
 
+	// --- v1.1 trust lines (#104/#105): commit at start, reveal at game over ---
+	{
+		Match m = makeMatch(GameMode::ClassicFFA, 313);
+		bool sawCommit = false;
+		for (const MatchEvent& e : m.log) {
+			if (e.text.find("Trust: seed commit") != std::string::npos) {
+				sawCommit = true;
+				char expect[16];
+				std::snprintf(expect, sizeof(expect), "%08x", seedCommitHash(m.config.seed));
+				CHECK(e.text.find(expect) != std::string::npos, "commit line carries hash(seed)");
+			}
+		}
+		CHECK(sawCommit, "seed commit logged at match start");
+		CHECK(autoFinish(m), "trust match finishes");
+		bool sawReveal = false;
+		for (const MatchEvent& e : m.log) {
+			if (e.text.find("Trust: seed was") != std::string::npos) {
+				sawReveal = true;
+			}
+		}
+		CHECK(sawReveal, "seed revealed at game over");
+		// Deck fingerprint is order-independent (decks are shuffled).
+		std::vector<CardInstance> a = { { 1, 1 }, { 5, 2 }, { 20, 3 } };
+		std::vector<CardInstance> b = { { 20, 9 }, { 1, 8 }, { 5, 7 } };
+		CHECK(deckCheckHash(a) == deckCheckHash(b), "deck hash ignores order/instance ids");
+		std::vector<CardInstance> c = { { 1, 1 }, { 5, 2 }, { 21, 3 } };
+		CHECK(deckCheckHash(a) != deckCheckHash(c), "deck hash detects content change");
+		std::printf("OK trust lines\n");
+	}
+
 	// --- Lobby targeting toggle (#70) ---
 	{
 		Match m = makeMatch(GameMode::ClassicFFA, 73);

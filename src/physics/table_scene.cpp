@@ -36,6 +36,45 @@ b3Vec3 TableScene::seatColor(int playerIndex)
 	return plasticColorRgb(defaultPlasticForSeat(playerIndex));
 }
 
+// v1.1 #141: felt dye presets (index 0 = map default).
+namespace {
+const struct {
+	const char* name;
+	float r, g, b;
+} kFeltDyes[] = {
+	{ "Map default", 0, 0, 0 },
+	{ "Crimson", 0.62f, 0.16f, 0.18f },
+	{ "Royal Blue", 0.16f, 0.28f, 0.62f },
+	{ "Charcoal", 0.22f, 0.22f, 0.24f },
+	{ "Cream", 0.85f, 0.80f, 0.68f },
+	{ "Mint", 0.35f, 0.72f, 0.55f },
+};
+} // namespace
+
+int TableScene::feltDyeCount()
+{
+	return static_cast<int>(sizeof(kFeltDyes) / sizeof(kFeltDyes[0]));
+}
+
+const char* TableScene::feltDyeName(int dyeIndex)
+{
+	if (dyeIndex < 0 || dyeIndex >= feltDyeCount()) {
+		return kFeltDyes[0].name;
+	}
+	return kFeltDyes[dyeIndex].name;
+}
+
+void TableScene::resolvedTableColor(MapId map, float& r, float& g, float& b) const
+{
+	if (feltDye_ > 0 && feltDye_ < feltDyeCount()) {
+		r = kFeltDyes[feltDye_].r;
+		g = kFeltDyes[feltDye_].g;
+		b = kFeltDyes[feltDye_].b;
+		return;
+	}
+	mapTableColor(map, r, g, b);
+}
+
 void TableScene::create(const Match& match)
 {
 	destroy();
@@ -48,7 +87,7 @@ void TableScene::create(const Match& match)
 	const float tableHalf = 1.6f;
 	const float tableThick = 0.06f;
 	float tr = 0.28f, tg = 0.55f, tb = 0.35f;
-	mapTableColor(match.config.mapId, tr, tg, tb);
+	resolvedTableColor(match.config.mapId, tr, tg, tb);
 	createStaticBox({ 0.0f, -tableThick, 0.0f }, tableHalf, tableThick, tableHalf, { tr, tg, tb },
 					BodyVisual::Kind::Table, -1);
 
@@ -182,7 +221,7 @@ void TableScene::create(const Match& match)
 	// v0.9 #120-lite: felt variation patches — subtle two-tone panels break up the flat top.
 	{
 		float tr2, tg2, tb2;
-		mapTableColor(match.config.mapId, tr2, tg2, tb2);
+		resolvedTableColor(match.config.mapId, tr2, tg2, tb2);
 		const bool checker = (match.config.mapId == MapId::PicnicBlanket);
 		for (int px = 0; px < 4; ++px) {
 			for (int pz = 0; pz < 4; ++pz) {
@@ -515,7 +554,7 @@ void TableScene::syncFromMatch(const Match& match)
 		}
 		if (v.kind == BodyVisual::Kind::Table && v.playerId < 0 && v.halfExtents.x > 1.0f) {
 			float tr, tg, tb;
-			mapTableColor(match.config.mapId, tr, tg, tb);
+			resolvedTableColor(match.config.mapId, tr, tg, tb);
 			if (match.world.kind == EventKind::Sandstorm && match.world.remainingTurns > 0) {
 				tr = tr * 0.7f + 0.35f;
 				tg = tg * 0.7f + 0.28f;

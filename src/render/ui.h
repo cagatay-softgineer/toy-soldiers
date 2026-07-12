@@ -93,6 +93,9 @@ struct UiState {
 	int hostedLobbies = 0;     // #171
 	int missionFlags = 0;      // #170 bitmask
 	int mapPlays[7] = {};      // #185
+	// v1.1
+	bool largeLogFont = false; // #112
+	int feltDyeIndex = 0;      // #141
 	int timelineIndex = -1; // scrubber into match.log (-1 = live/end)
 	bool showTimeline = true;
 	bool coachTipDismissed = false; // per-session; re-offer next match until 3 done

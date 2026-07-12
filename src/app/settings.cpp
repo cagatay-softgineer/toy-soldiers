@@ -222,6 +222,10 @@ bool settingsLoad(Settings& out)
 			if (idx >= 0 && idx < 7) {
 				out.mapPlays[idx] = std::atoi(val);
 			}
+		} else if (std::strcmp(key, "largeLogFont") == 0) {
+			out.largeLogFont = parseBool(val, false);
+		} else if (std::strcmp(key, "feltDyeIndex") == 0) {
+			out.feltDyeIndex = std::atoi(val);
 		}
 	}
 	std::fclose(f);
@@ -279,6 +283,8 @@ bool settingsSave(const Settings& s)
 			std::fprintf(f, "mapPlays%d=%d\n", i, tmp.mapPlays[i]);
 		}
 	}
+	std::fprintf(f, "largeLogFont=%d\n", tmp.largeLogFont ? 1 : 0);
+	std::fprintf(f, "feltDyeIndex=%d\n", tmp.feltDyeIndex);
 	std::fclose(f);
 	return true;
 }

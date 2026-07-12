@@ -6,10 +6,10 @@
 namespace toy {
 
 constexpr int kVersionMajor = 1;
-constexpr int kVersionMinor = 0;
+constexpr int kVersionMinor = 1;
 constexpr int kVersionPatch = 0;
-constexpr const char* kVersionString = "1.0.0";
-constexpr const char* kVersionCodename = "Ship Toy Soldiers";
+constexpr const char* kVersionString = "1.1.0";
+constexpr const char* kVersionCodename = "Encore";
 // #166/#195: product page + support (fail-open — only opened on user click).
 constexpr const char* kProjectUrl = "https://github.com/cagatay-softgineer/toy-soldiers";
 constexpr const char* kSupportContact = "support: GitHub issues (placeholder — Discord invite TBD)";

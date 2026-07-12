@@ -465,6 +465,41 @@ bool cardsReloadIfChanged(const char* path)
 	return cardsLoadJsonFile(path); // first call = startup load, later calls = #149 hot reload
 }
 
+namespace {
+
+uint32_t fnv1a(const uint8_t* data, size_t n, uint32_t hash = 0x811C9DC5u)
+{
+	for (size_t i = 0; i < n; ++i) {
+		hash ^= data[i];
+		hash *= 0x01000193u;
+	}
+	return hash;
+}
+
+} // namespace
+
+uint32_t seedCommitHash(uint32_t seed)
+{
+	// Salted so the commitment does not trivially equal a hash table lookup of small seeds.
+	const uint32_t salted[2] = { seed, 0x544F5921u }; // 'TOY!'
+	return fnv1a(reinterpret_cast<const uint8_t*>(salted), sizeof(salted));
+}
+
+uint32_t deckCheckHash(const std::vector<CardInstance>& deck)
+{
+	std::vector<int> ids;
+	ids.reserve(deck.size());
+	for (const CardInstance& c : deck) {
+		ids.push_back(c.defId);
+	}
+	std::sort(ids.begin(), ids.end()); // order-independent (decks are shuffled)
+	uint32_t h = 0x811C9DC5u;
+	for (int id : ids) {
+		h = fnv1a(reinterpret_cast<const uint8_t*>(&id), sizeof(id), h);
+	}
+	return h;
+}
+
 uint32_t xorshift32(uint32_t& state)
 {
 	uint32_t x = state ? state : 1u;

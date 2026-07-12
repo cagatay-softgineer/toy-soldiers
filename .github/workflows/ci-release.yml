@@ -114,6 +114,50 @@ jobs:
           path: dist/*.zip
           if-no-files-found: error
 
+  linux-test:
+    name: Build & test (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout toy-soldiers
+        uses: actions/checkout@v7
+
+      - name: Checkout Box3D (pinned)
+        uses: actions/checkout@v7
+        with:
+          repository: erincatto/box3d
+          ref: ${{ env.BOX3D_REF }}
+          path: box3d-src
+
+      - name: Cache FetchContent
+        uses: actions/cache@v6
+        with:
+          path: box3d-src/.fetchcontent-cache
+          key: fetchcontent-linux-${{ hashFiles('CMakeLists.txt') }}
+
+      # X11/GL for sokol_app GLCORE, ALSA for sokol_audio.
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libx11-dev libxi-dev libxcursor-dev libgl1-mesa-dev libasound2-dev
+
+      - name: Configure & build
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DTOY_BOX3D_DIR="$GITHUB_WORKSPACE/box3d-src"
+          cmake --build build --parallel
+
+      # verify.ps1 is Windows-shaped; run the same 8 headless gates directly.
+      - name: Run headless gates
+        run: |
+          set -e
+          for t in toy_sim toy_event_test toy_cosmetic_test toy_mode_test toy_content_test toy_balance_report toy_net_test toy_golden_seed_test; do
+            echo "=== $t ==="
+            ./build/bin/$t
+          done
+          echo "linux verify OK - all gates passed"
+
   continuous-release:
     name: Rolling continuous pre-release
     needs: test

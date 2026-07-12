@@ -60,6 +60,10 @@ struct Settings {
 	int hostedLobbies = 0;     // #171 badge counter
 	int missionFlags = 0;      // #170 bitmask of completed challenge missions
 	int mapPlays[7] = {};      // #185 favorite-map tracking (indexed by MapId)
+
+	// --- v1.1 ---
+	bool largeLogFont = false; // #112 Twitch-friendly battle log
+	int feltDyeIndex = 0;      // #141 local table tint (0 = map default)
 };
 
 // v0.8: push a host to the top of the recent list (dedup by ip+port).

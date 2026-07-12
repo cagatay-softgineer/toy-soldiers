@@ -1,0 +1,64 @@
+# v1.1 #152: community card proposals — the catalog is data-driven (data/cards.json),
+# so accepted proposals become one JSON object + TR text.
+name: Card proposal
+description: Propose a new order card for the toybox
+title: "[card] "
+labels: ["type:card-proposal"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Cards are plain JSON (see `data/cards.json`). Keep the toy tone — plastic and
+        nostalgia, never war realism. Balance note: numbers are frozen between releases,
+        so proposals land in the next minor version at the earliest.
+  - type: input
+    id: name
+    attributes:
+      label: Card name
+      placeholder: "Rubber Band Ballista"
+    validations:
+      required: true
+  - type: dropdown
+    id: class
+    attributes:
+      label: Class
+      options: [Attack, Defense, Tactic, Event]
+    validations:
+      required: true
+  - type: dropdown
+    id: rarity
+    attributes:
+      label: Rarity
+      options: [Common, Rare, Epic, Legendary]
+    validations:
+      required: true
+  - type: input
+    id: effect
+    attributes:
+      label: Effect (one sentence, EN)
+      placeholder: "Deal 2 damage. Pierce: ignores shield."
+    validations:
+      required: true
+  - type: input
+    id: effect-tr
+    attributes:
+      label: Effect (TR, optional — we can translate)
+      placeholder: "2 hasar ver. Delici: kalkani yok sayar."
+  - type: checkboxes
+    id: keywords
+    attributes:
+      label: Keywords
+      options:
+        - label: Shield
+        - label: Pierce
+        - label: Draw
+        - label: Heal
+        - label: AdjacentOnly
+        - label: AOE
+        - label: Event
+  - type: textarea
+    id: why
+    attributes:
+      label: Why is this fun / what's the counterplay?
+    validations:
+      required: true

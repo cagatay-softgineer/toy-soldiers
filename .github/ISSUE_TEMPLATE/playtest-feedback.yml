@@ -1,0 +1,58 @@
+# v1.0 #178: external playtest feedback form.
+name: Playtest feedback
+description: Tell us how your session went (solo or LAN party)
+title: "[playtest] "
+labels: ["type:playtest"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for playing! Version info lives in `version.json` next to the exe, and
+        logs in `%APPDATA%\toy-soldiers\logs\` (no personal data in them).
+  - type: input
+    id: version
+    attributes:
+      label: Game version
+      placeholder: "1.0.0 (from version.json or the title bar)"
+    validations:
+      required: true
+  - type: dropdown
+    id: setup
+    attributes:
+      label: How did you play?
+      options:
+        - Solo vs AI
+        - Hotseat (shared PC)
+        - LAN party (2 players)
+        - LAN party (3-4 players)
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Main mode played
+      options: [Classic FFA, Quick Duel, 2v2 Teams, Hot Potato King, Sandbox, Tutorial]
+  - type: textarea
+    id: fun
+    attributes:
+      label: Best moment of the session
+      placeholder: "The cat pounced right as I was about to win and..."
+    validations:
+      required: true
+  - type: textarea
+    id: friction
+    attributes:
+      label: What was confusing or annoying?
+    validations:
+      required: true
+  - type: textarea
+    id: bugs
+    attributes:
+      label: Bugs seen (if any)
+      placeholder: "Steps to reproduce if you can; attach a session log or minidump if you have one."
+  - type: input
+    id: verdict
+    attributes:
+      label: Would you play again? (yes / no / with changes)
+    validations:
+      required: true

@@ -33,6 +33,8 @@ bool audioReady();
 
 // Volumes 0..1 (#134). Applied immediately.
 void audioSetVolumes(float master, float sfx, float music);
+// v1.0 #199: duck everything to ~15% while the window is unfocused.
+void audioSetDucked(bool ducked);
 
 void sfxPlay(Sfx s);
 // #132: short stinger themed per world event.

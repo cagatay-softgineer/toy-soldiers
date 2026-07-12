@@ -21,3 +21,4 @@ Thumbs.db
 .box3d-src/
 /build-asan/
 balance_report.csv
+/dist/

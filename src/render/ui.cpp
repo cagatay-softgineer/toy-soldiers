@@ -1,6 +1,7 @@
 #include "render/ui.h"
 
 #include "app/i18n.h"
+#include "app/version.h"
 #include "game/cards.h"
 #include "game/cosmetics.h"
 #include "game/events.h"
@@ -100,6 +101,12 @@ void uiApplySettings(UiState& ui, const Settings& s)
 	ui.wins = s.wins;
 	ui.sfxVolume = s.sfxVolume;
 	ui.musicVolume = s.musicVolume;
+	ui.tutorialDone = s.tutorialDone;
+	ui.hostedLobbies = s.hostedLobbies;
+	ui.missionFlags = s.missionFlags;
+	for (int i = 0; i < 7; ++i) {
+		ui.mapPlays[i] = s.mapPlays[i];
+	}
 	for (int i = 0; i < Settings::kRecentHostMax; ++i) {
 		std::snprintf(ui.recentHosts[i], sizeof(ui.recentHosts[i]), "%s", s.recentHosts[i]);
 	}
@@ -140,6 +147,12 @@ void uiCaptureSettings(const UiState& ui, Settings& s)
 	s.wins = ui.wins;
 	s.sfxVolume = ui.sfxVolume;
 	s.musicVolume = ui.musicVolume;
+	s.tutorialDone = ui.tutorialDone;
+	s.hostedLobbies = ui.hostedLobbies;
+	s.missionFlags = ui.missionFlags;
+	for (int i = 0; i < 7; ++i) {
+		s.mapPlays[i] = ui.mapPlays[i];
+	}
 	for (int i = 0; i < Settings::kRecentHostMax; ++i) {
 		std::snprintf(s.recentHosts[i], sizeof(s.recentHosts[i]), "%s", ui.recentHosts[i]);
 	}
@@ -199,6 +212,36 @@ const char* modeName(AppMode m)
 	case AppMode::Client: return "Client";
 	}
 	return "?";
+}
+
+// v1.0 #169: game-mode picker with Sandbox gated behind the tutorial.
+bool drawModeCombo(const char* label, int& modeIndex, bool sandboxUnlocked)
+{
+	bool changed = false;
+	if (modeIndex < 0 || modeIndex >= static_cast<int>(GameMode::Count)) {
+		modeIndex = 0;
+	}
+	if (ImGui::BeginCombo(label, gameModeName(static_cast<GameMode>(modeIndex)))) {
+		for (int i = 0; i < static_cast<int>(GameMode::Count); ++i) {
+			const bool isSandbox = static_cast<GameMode>(i) == GameMode::Sandbox;
+			const bool locked = isSandbox && !sandboxUnlocked;
+			char item[96];
+			std::snprintf(item, sizeof(item), "%s%s##mode%d", gameModeName(static_cast<GameMode>(i)),
+						  locked ? tr("mode.locked_sandbox") : "", i);
+			if (locked) {
+				ImGui::BeginDisabled();
+			}
+			if (ImGui::Selectable(item, modeIndex == i)) {
+				modeIndex = i;
+				changed = true;
+			}
+			if (locked) {
+				ImGui::EndDisabled();
+			}
+		}
+		ImGui::EndCombo();
+	}
+	return changed;
 }
 
 void applyUiScale(const UiState& ui)
@@ -562,17 +605,23 @@ void drawMenuV2(LanDiscovery& discovery, UiState& ui)
 				 ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize);
 
 	ImGui::TextColored(ImVec4(0.96f, 0.77f, 0.36f, 1.0f), "%s", tr("app.title"));
-	ImGui::TextDisabled("v0.9 Identity & Content  ·  protocol %u", static_cast<unsigned>(kProtocolVersion));
+	ImGui::TextDisabled("v%s %s  ·  protocol %u", kVersionString, kVersionCodename, static_cast<unsigned>(kProtocolVersion));
 	ImGui::Separator();
 
 	ImGui::InputText(tr("menu.display_name"), ui.playerName, sizeof(ui.playerName));
 
+	// v1.0 #168: tutorial front and center for new players.
+	if (ImGui::Button(tr("menu.tutorial"), ImVec2(-1, ui.tutorialDone ? 32.0f : 42.0f))) {
+		ui.selectedHand = -8;
+	}
+	if (!ui.tutorialDone) {
+		ImGui::TextDisabled("%s", tr("menu.tutorial_hint"));
+	}
+	ImGui::Separator();
+
 	// v0.7 match setup: mode (#52-#57), AI level (#58), turn timer (#56), targeting (#70).
 	if (ImGui::CollapsingHeader(tr("menu.match_setup"), ImGuiTreeNodeFlags_DefaultOpen)) {
-		const char* modes[] = { gameModeName(GameMode::ClassicFFA), gameModeName(GameMode::QuickDuel),
-								gameModeName(GameMode::Teams2v2), gameModeName(GameMode::HotPotato),
-								gameModeName(GameMode::Sandbox) };
-		if (ImGui::Combo(tr("menu.mode"), &ui.modeIndex, modes, static_cast<int>(GameMode::Count))) {
+		if (drawModeCombo(tr("menu.mode"), ui.modeIndex, ui.tutorialDone)) {
 			ui.settingsDirty = true;
 		}
 		ImGui::TextDisabled("%s", gameModeBlurb(static_cast<GameMode>(ui.modeIndex)));
@@ -722,6 +771,9 @@ void drawMenuV2(LanDiscovery& discovery, UiState& ui)
 	if (ImGui::Button(tr("menu.codex"), ImVec2(-1, 32))) {
 		ui.screen = AppScreen::Codex;
 	}
+	if (ImGui::Button(tr("menu.profile"), ImVec2(-1, 32))) {
+		ui.screen = AppScreen::Profile;
+	}
 	if (ImGui::Button(tr("menu.credits"), ImVec2(-1, 32))) {
 		ui.screen = AppScreen::Credits;
 	}
@@ -740,7 +792,7 @@ void drawCredits(UiState& ui)
 	ImGui::Begin(tr("credits.title"), nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse);
 
 	ImGui::TextColored(ImVec4(0.96f, 0.77f, 0.36f, 1.0f), "%s", tr("app.title"));
-	ImGui::TextDisabled("v0.9 Identity & Content");
+	ImGui::TextDisabled("v%s %s", kVersionString, kVersionCodename);
 	ImGui::Separator();
 	ImGui::TextUnformatted("Game");
 	ImGui::BulletText("Design & code — preunec / cagatay-softgineer");
@@ -758,6 +810,11 @@ void drawCredits(UiState& ui)
 	ImGui::TextWrapped("Minidumps (if any): %%APPDATA%%/toy-soldiers/crashes/");
 	ImGui::TextDisabled("Protocol v%u · Default port %u", static_cast<unsigned>(kProtocolVersion),
 						static_cast<unsigned>(kDefaultPort));
+	// v1.0 #166/#195: manual update check (fail-open — just opens the project page).
+	ImGui::TextDisabled("%s", kSupportContact);
+	if (ImGui::Button(tr("credits.updates"), ImVec2(-1, 30))) {
+		ui.wantOpenProjectUrl = true;
+	}
 	if (ImGui::Button(tr("credits.back"), ImVec2(-1, 36))) {
 		ui.screen = AppScreen::Menu;
 	}
@@ -812,6 +869,95 @@ void drawCodex(UiState& ui)
 		}
 		ImGui::EndTable();
 	}
+	if (ImGui::Button(tr("credits.back"), ImVec2(-1, 36))) {
+		ui.screen = AppScreen::Menu;
+	}
+	ImGui::End();
+}
+
+// v1.0 #170/#171/#185/#186: local profile — stats, badges, missions, match history.
+void drawProfile(UiState& ui)
+{
+	const ImGuiViewport* vp = ImGui::GetMainViewport();
+	ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.5f),
+							ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+	ImGui::SetNextWindowSize(ImVec2(560, vp->WorkSize.y * 0.85f), ImGuiCond_Always);
+	ImGui::Begin(tr("profile.title"), nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize);
+
+	// #185: headline stats.
+	ImGui::TextColored(ImVec4(0.96f, 0.77f, 0.36f, 1.0f), "%s", ui.playerName);
+	int favMap = 0;
+	int totalPlays = 0;
+	for (int i = 0; i < 7; ++i) {
+		totalPlays += ui.mapPlays[i];
+		if (ui.mapPlays[i] > ui.mapPlays[favMap]) {
+			favMap = i;
+		}
+	}
+	ImGui::Text("%s: %d   ·   %s: %d", tr("profile.matches"), ui.matchesCompleted, tr("profile.wins"), ui.wins);
+	if (totalPlays > 0) {
+		ImGui::Text("%s: %s (%d)", tr("profile.fav_map"), mapName(static_cast<MapId>(favMap)), ui.mapPlays[favMap]);
+	} else {
+		ImGui::TextDisabled("%s: —", tr("profile.fav_map"));
+	}
+	ImGui::TextDisabled("%s %d · %s", tr("profile.hosted"), ui.hostedLobbies,
+						ui.tutorialDone ? tr("profile.tut_done") : tr("profile.tut_todo"));
+
+	// #171: local badges.
+	ImGui::Separator();
+	ImGui::TextUnformatted(tr("profile.badges"));
+	struct Badge {
+		const char* key;
+		bool earned;
+	};
+	const Badge badges[] = {
+		{ "badge.graduate", ui.tutorialDone },
+		{ "badge.first_win", ui.wins >= 1 },
+		{ "badge.veteran", ui.wins >= 10 },
+		{ "badge.regular", ui.matchesCompleted >= 10 },
+		{ "badge.devoted", ui.matchesCompleted >= 25 },
+		{ "badge.party_host", ui.hostedLobbies >= 5 },
+	};
+	for (const Badge& b : badges) {
+		if (b.earned) {
+			ImGui::TextColored(ImVec4(0.96f, 0.77f, 0.36f, 1.0f), "[*] %s", tr(b.key));
+		} else {
+			ImGui::TextDisabled("[ ] %s", tr(b.key));
+		}
+	}
+
+	// #170: challenge missions (bitmask).
+	ImGui::Separator();
+	ImGui::TextUnformatted(tr("profile.missions"));
+	const char* missionKeys[] = { "mission.storm", "mission.medic", "mission.untouchable" };
+	for (int i = 0; i < 3; ++i) {
+		if (ui.missionFlags & (1 << i)) {
+			ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.5f, 1.0f), "[x] %s", tr(missionKeys[i]));
+		} else {
+			ImGui::TextDisabled("[ ] %s", tr(missionKeys[i]));
+		}
+	}
+
+	// #186: last-20 match history (re-read when entering the screen).
+	ImGui::Separator();
+	ImGui::TextUnformatted(tr("profile.history"));
+	static char lines[20][160];
+	static int lineCount = -1;
+	static AppScreen lastScreen = AppScreen::Menu;
+	if (lastScreen != AppScreen::Profile) {
+		lineCount = historyReadLast(lines, 20);
+	}
+	lastScreen = ui.screen;
+	if (ImGui::BeginChild("##hist", ImVec2(0, -44))) {
+		if (lineCount <= 0) {
+			ImGui::TextDisabled("%s", tr("profile.no_history"));
+		}
+		for (int i = 0; i < lineCount; ++i) {
+			ImGui::TextWrapped("%s", lines[i]);
+		}
+	}
+	ImGui::EndChild();
+
 	if (ImGui::Button(tr("credits.back"), ImVec2(-1, 36))) {
 		ui.screen = AppScreen::Menu;
 	}
@@ -1157,12 +1303,9 @@ void drawLobbyScreen(Match& match, NetSession& session, UiState& ui)
 				session.hostPushState(match);
 			}
 		}
-		// v0.7: host-side game setup in lobby.
+		// v0.7: host-side game setup in lobby (Sandbox gated by tutorial, #169).
 		ui.modeIndex = static_cast<int>(match.config.mode);
-		const char* modes[] = { gameModeName(GameMode::ClassicFFA), gameModeName(GameMode::QuickDuel),
-								gameModeName(GameMode::Teams2v2), gameModeName(GameMode::HotPotato),
-								gameModeName(GameMode::Sandbox) };
-		if (ImGui::Combo(tr("menu.mode"), &ui.modeIndex, modes, static_cast<int>(GameMode::Count))) {
+		if (drawModeCombo(tr("menu.mode"), ui.modeIndex, ui.tutorialDone)) {
 			match.config.mode = static_cast<GameMode>(ui.modeIndex);
 			applyModeToConfig(match.config);
 			if (session.mode() == AppMode::Host) {
@@ -1307,6 +1450,46 @@ void drawLobbyScreen(Match& match, NetSession& session, UiState& ui)
 	}
 	if (ImGui::SmallButton("Help")) {
 		ui.showHowToPlay = true;
+	}
+	ImGui::End();
+}
+
+// v1.0 #168: guided first match — bottom-center step card.
+void drawTutorialOverlay(Match& match, UiState& ui)
+{
+	if (ui.tutorialStep < 0 || ui.tutorialStep > 6) {
+		return;
+	}
+	// Step 3 auto-advances the moment the player has played any card.
+	if (ui.tutorialStep == 3 && !match.players[0].discard.empty()) {
+		ui.tutorialStep = 4;
+	}
+
+	const ImGuiViewport* vp = ImGui::GetMainViewport();
+	ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y - 264),
+							ImGuiCond_Always, ImVec2(0.5f, 1.0f));
+	ImGui::SetNextWindowSize(ImVec2(520, 0), ImGuiCond_Always);
+	ImGui::SetNextWindowBgAlpha(0.94f);
+	if (ImGui::Begin("##tutorial", nullptr,
+					 ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+						 ImGuiWindowFlags_AlwaysAutoResize)) {
+		ImGui::TextColored(ImVec4(0.96f, 0.77f, 0.36f, 1.0f), "%s  %d/7", tr("tut.title"), ui.tutorialStep + 1);
+		char key[16];
+		std::snprintf(key, sizeof(key), "tut.%d", ui.tutorialStep);
+		ImGui::TextWrapped("%s", tr(key));
+		ImGui::Spacing();
+		const bool waitStep = (ui.tutorialStep == 3 || ui.tutorialStep == 6);
+		if (!waitStep) {
+			if (ImGui::Button(tr("tut.next"), ImVec2(140, 30))) {
+				++ui.tutorialStep;
+			}
+			ImGui::SameLine();
+		} else {
+			ImGui::TextDisabled("%s", tr(ui.tutorialStep == 3 ? "tut.wait_play" : "tut.wait_win"));
+		}
+		if (ImGui::SmallButton(tr("tut.skip"))) {
+			ui.tutorialStep = -1; // hide overlay; main still finishes the tutorial at match end
+		}
 	}
 	ImGui::End();
 }
@@ -1661,6 +1844,9 @@ void drawMatchHud(Match& match, NetSession& session, UiState& ui)
 	// Coach tips during early matches (P2 #13)
 	drawCoachTip(ui);
 
+	// v1.0 #168: tutorial step card sits above the hand.
+	drawTutorialOverlay(match, ui);
+
 	if (match.phase == Phase::GameOver) {
 		ui.screen = AppScreen::Results;
 	}
@@ -1862,6 +2048,9 @@ void uiDraw(Match& match, NetSession& session, LanDiscovery& discovery, UiState&
 		break;
 	case AppScreen::Codex:
 		drawCodex(ui);
+		break;
+	case AppScreen::Profile:
+		drawProfile(ui);
 		break;
 	case AppScreen::Lobby:
 		drawLobbyScreen(match, session, ui);

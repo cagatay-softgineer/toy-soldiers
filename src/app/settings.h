@@ -54,10 +54,22 @@ struct Settings {
 	float musicVolume = 0.5f;
 	// v0.9 #146: local unlock track.
 	int wins = 0;
+
+	// --- v1.0 meta ---
+	bool tutorialDone = false; // #168/#169
+	int hostedLobbies = 0;     // #171 badge counter
+	int missionFlags = 0;      // #170 bitmask of completed challenge missions
+	int mapPlays[7] = {};      // #185 favorite-map tracking (indexed by MapId)
 };
 
 // v0.8: push a host to the top of the recent list (dedup by ip+port).
 void settingsAddRecentHost(Settings& s, const char* name, const char* ip, int port);
+
+// v1.0 #186: plain-text match history next to settings.ini (append-only, read last N).
+const char* historyPath();
+bool historyAppend(const char* line);
+// Fills out[0..returned-1] with the most recent lines, newest first (max 20).
+int historyReadLast(char out[][160], int maxLines);
 
 bool settingsLoad(Settings& out);
 bool settingsSave(const Settings& s);

@@ -5,7 +5,52 @@ All notable changes to **Oyuncak Asker Masa Savaşı (toy-soldiers)** are docume
 ## [Unreleased]
 
 ### Planned
-- v1.0 Ship Toy Soldiers — see [docs/ROADMAP_to_v1.md](docs/ROADMAP_to_v1.md)
+- v1.0.1 hotfix buffer + v1.1 ideas — see [docs/RELEASE.md](docs/RELEASE.md)
+
+## [1.0.0] — 2026-07-12 · "Ship Toy Soldiers"
+
+**Balance freeze (#173):** card numbers, tower stats, and event weights are frozen.
+Only bug fixes after this tag (policy: docs/RELEASE.md).
+
+### Added — v1.0 release engineering (#162-#166)
+- Single-source version (`src/app/version.h`) shown in title bar, menu, credits, and
+  written to `version.json` inside every package
+- `scripts/package.ps1`: portable win64 zip (exe + cards.json + licenses + README +
+  version.json), optional symbols archive, and a `-Smoke` mode that extracts the zip to a
+  clean temp dir and verifies the game boots (#200 — passing)
+- Inno Setup installer script (`scripts/installer.iss`, EN/TR) as the one-click option
+- `THIRD_PARTY_LICENSES.md` (Box3D MIT, sokol zlib, Dear ImGui MIT) ships in the package
+- "Project page / check updates" button in credits (fail-open, opens the browser)
+
+### Added — new-player path (#168-#169)
+- **Guided tutorial**: 7-step overlay over a real Quick Duel vs a gentle Easy bot
+  ("Sgt. Bumble") — auto-advances when you play your first card, completes win or lose
+- Sandbox mode is locked until the tutorial is done (soft gate with hint)
+
+### Added — meta systems (#170-#171, #185-#187)
+- **Profile & Badges** screen: matches/wins/favorite map, six local badges
+  (Graduate, First Blood, Veteran, Regular, Devoted, Party Host)
+- Three challenge missions with live detection + completion toasts:
+  Storm Winner, Field Medic (10+ HP healed), Untouchable (win at 75%+ HP)
+- Match history: one line per finished match to `%APPDATA%/toy-soldiers/history.txt`,
+  last 20 shown in the profile
+- **Photo mode** (P): hides all UI; fully freezes the sim in offline matches
+- Audio ducks to 15% when the window loses focus (#199), with a click-free glide
+
+### QA & launch ops (#174-#177, #189-#197)
+- Balance regression widened to 200 trials — 200/200 finished, avg 54.9 turns,
+  sniper 56% win rate (mid-band), even seat spread
+- Net fuzzer extended: 40 rounds of random-typed/garbage packets against a live host (#177)
+- Launch docs: itch.io page copy EN/TR + screenshot shot list (#179/#181), 45s trailer
+  script (#180), press kit (#183), playtest checklist (#175), known-issues list (#176),
+  day-0 hotfix policy + v1.0.1 buffer + v1.1 teaser (#194/#196/#197),
+  privacy/rating/EULA/accessibility statements (#189-#192) — see docs/store/, docs/RELEASE.md,
+  docs/LEGAL.md
+
+### Remaining human steps before store launch
+- Capture the 5 screenshots + trailer per docs/store/
+- Run the 4-human LAN playtest checklist (docs/RELEASE.md)
+- Create the itch.io page and upload `dist/toy-soldiers-v1.0.0-win64.zip`
 
 ## [0.9.0-dev] — 2026-07-12
 

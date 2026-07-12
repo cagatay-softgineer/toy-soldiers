@@ -1,3 +1,4 @@
+#include "game/cards.h"
 #include "game/match.h"
 #include "game/rules.h"
 #include "game/snapshot.h"
@@ -251,6 +252,33 @@ int main()
 		evil[3] = 0x7F;
 		raw.send(evil, sizeof(evil));
 		pumpHost(host, hm, 20);
+
+		// v1.0 #177: sustained fuzz — valid frames with random types/payloads must never
+		// crash the host (each fresh socket, since bad frames get the client dropped).
+		uint32_t fuzzRng = 0xFADEDBEEu;
+		for (int round = 0; round < 40; ++round) {
+			net::TcpSocket fz;
+			if (!fz.connect("127.0.0.1", 27132)) {
+				continue;
+			}
+			std::vector<uint8_t> payload;
+			payload.push_back(0x54); // 'T' — sometimes forms the real magic below
+			for (int b = 0; b < 48; ++b) {
+				payload.push_back(static_cast<uint8_t>(xorshift32(fuzzRng) & 0xFF));
+			}
+			if (round % 3 == 0) {
+				// Real header magic + random type/version + junk payload.
+				payload[0] = 0x54;
+				payload[1] = 0x59;
+				payload[2] = 0x32;
+				payload[3] = 0x4D;
+			}
+			const auto framed = net::FrameCodec::pack(payload);
+			fz.send(framed.data(), static_cast<int>(framed.size()));
+			pumpHost(host, hm, 2);
+			fz.close();
+		}
+		pumpHost(host, hm, 10);
 		// Host survives and still accepts a legitimate client.
 		Match cm;
 		NetSession client;

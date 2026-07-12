@@ -15,6 +15,7 @@ enum class AppScreen : uint8_t {
 	HowToPlay,
 	Credits,
 	Codex,   // offline card browser
+	Profile, // v1.0 #185: stats, badges, missions, history
 	Lobby,   // host/client lobby or offline prep
 	Match,   // playing
 	Results, // game over
@@ -86,6 +87,12 @@ struct UiState {
 	int wins = 0;            // #146 unlock track
 	float sfxVolume = 0.8f;  // #134
 	float musicVolume = 0.5f;
+	// v1.0
+	int tutorialStep = -1;     // #168: -1 off, 0.. = active overlay step
+	bool tutorialDone = false; // #169 gates Sandbox
+	int hostedLobbies = 0;     // #171
+	int missionFlags = 0;      // #170 bitmask
+	int mapPlays[7] = {};      // #185
 	int timelineIndex = -1; // scrubber into match.log (-1 = live/end)
 	bool showTimeline = true;
 	bool coachTipDismissed = false; // per-session; re-offer next match until 3 done
@@ -107,6 +114,7 @@ struct UiState {
 	bool settingsDirty = false;
 	bool wantFullscreenToggle = false; // consumed by main
 	bool wantApplyDisplay = false;
+	bool wantOpenProjectUrl = false; // v1.0 #166: open releases page (consumed by main)
 	bool matchCounted = false; // results: count matchesCompleted once per game over
 };
 

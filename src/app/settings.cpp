@@ -211,6 +211,17 @@ bool settingsLoad(Settings& out)
 			out.musicVolume = static_cast<float>(std::atof(val));
 		} else if (std::strcmp(key, "wins") == 0) {
 			out.wins = std::atoi(val);
+		} else if (std::strcmp(key, "tutorialDone") == 0) {
+			out.tutorialDone = parseBool(val, false);
+		} else if (std::strcmp(key, "hostedLobbies") == 0) {
+			out.hostedLobbies = std::atoi(val);
+		} else if (std::strcmp(key, "missionFlags") == 0) {
+			out.missionFlags = std::atoi(val);
+		} else if (std::strncmp(key, "mapPlays", 8) == 0) {
+			const int idx = std::atoi(key + 8);
+			if (idx >= 0 && idx < 7) {
+				out.mapPlays[idx] = std::atoi(val);
+			}
 		}
 	}
 	std::fclose(f);
@@ -260,6 +271,14 @@ bool settingsSave(const Settings& s)
 	std::fprintf(f, "sfxVolume=%.3f\n", static_cast<double>(tmp.sfxVolume));
 	std::fprintf(f, "musicVolume=%.3f\n", static_cast<double>(tmp.musicVolume));
 	std::fprintf(f, "wins=%d\n", tmp.wins);
+	std::fprintf(f, "tutorialDone=%d\n", tmp.tutorialDone ? 1 : 0);
+	std::fprintf(f, "hostedLobbies=%d\n", tmp.hostedLobbies);
+	std::fprintf(f, "missionFlags=%d\n", tmp.missionFlags);
+	for (int i = 0; i < 7; ++i) {
+		if (tmp.mapPlays[i] > 0) {
+			std::fprintf(f, "mapPlays%d=%d\n", i, tmp.mapPlays[i]);
+		}
+	}
 	std::fclose(f);
 	return true;
 }
@@ -289,6 +308,81 @@ void settingsAddRecentHost(Settings& s, const char* name, const char* ip, int po
 		std::snprintf(s.recentHosts[i], sizeof(s.recentHosts[i]), "%s", s.recentHosts[i - 1]);
 	}
 	std::snprintf(s.recentHosts[0], sizeof(s.recentHosts[0]), "%s", entry);
+}
+
+// --- v1.0 #186: match history ---
+
+const char* historyPath()
+{
+	static std::string p;
+	if (p.empty()) {
+		p = settingsPath(); // ensures the directory exists
+		const size_t slash = p.find_last_of("/\\");
+		p = (slash == std::string::npos) ? "toy-soldiers-history.txt" : p.substr(0, slash + 1) + "history.txt";
+	}
+	return p.c_str();
+}
+
+bool historyAppend(const char* line)
+{
+	if (!line || !line[0]) {
+		return false;
+	}
+	FILE* f = std::fopen(historyPath(), "ab");
+	if (!f) {
+		return false;
+	}
+	std::fprintf(f, "%s\n", line);
+	std::fclose(f);
+	return true;
+}
+
+int historyReadLast(char out[][160], int maxLines)
+{
+	if (maxLines <= 0) {
+		return 0;
+	}
+	FILE* f = std::fopen(historyPath(), "rb");
+	if (!f) {
+		return 0;
+	}
+	// Ring buffer over all lines; file stays small (one line per match).
+	std::string all;
+	char buf[512];
+	while (std::fgets(buf, sizeof(buf), f)) {
+		all += buf;
+	}
+	std::fclose(f);
+
+	// Collect line start offsets.
+	std::string cur;
+	// newest first: walk lines, keep last maxLines in a rotating window
+	char window[20][160] = {};
+	int count = 0;
+	size_t start = 0;
+	for (size_t i = 0; i <= all.size(); ++i) {
+		if (i == all.size() || all[i] == '\n') {
+			if (i > start) {
+				std::string line = all.substr(start, i - start);
+				while (!line.empty() && (line.back() == '\r')) {
+					line.pop_back();
+				}
+				if (!line.empty()) {
+					std::snprintf(window[count % 20], sizeof(window[0]), "%s", line.c_str());
+					++count;
+				}
+			}
+			start = i + 1;
+		}
+	}
+	const int have = count < 20 ? count : 20;
+	const int n = have < maxLines ? have : maxLines;
+	for (int k = 0; k < n; ++k) {
+		// newest first
+		const int idx = (count - 1 - k) % 20;
+		std::snprintf(out[k], 160, "%s", window[(idx + 20) % 20]);
+	}
+	return n;
 }
 
 namespace {

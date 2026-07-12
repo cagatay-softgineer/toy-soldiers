@@ -1,4 +1,5 @@
 #include "app/audio.h"
+#include "app/version.h"
 #include "app/crash_handler.h"
 #include "app/i18n.h"
 #include "app/session_log.h"
@@ -19,6 +20,15 @@
 #include "sokol_log.h"
 
 #include <cstdio>
+#include <ctime>
+
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <shellapi.h>
+#endif
 
 namespace {
 
@@ -55,6 +65,11 @@ uint32_t g_fxWinMatchId = 0;
 uint32_t g_fxTrackedMatchId = 0;
 float g_flyTimer = 0.0f; // #129 intro fly-over
 float g_cardsReloadPoll = 0.0f;
+// v1.0
+bool g_tutorialMatch = false; // #168: current offline match is the guided tutorial
+bool g_photoMode = false;     // #187: P key — freeze sim (offline) + hide UI
+bool g_missionStormSeen = false; // #170 trackers (reset per match)
+int g_missionHealedLocal = 0;
 
 void rebuildScene()
 {
@@ -99,6 +114,9 @@ void goMenu()
 	g_ui.pauseOpen = false;
 	g_ui.leaveConfirmOpen = false;
 	g_ui.rematchVoteSent = false;
+	g_ui.tutorialStep = -1;
+	g_tutorialMatch = false;
+	g_photoMode = false;
 	saveSettingsIfDirty();
 }
 
@@ -139,6 +157,7 @@ void startHostLobby()
 	g_ui.screen = toy::AppScreen::Lobby;
 	g_ui.selectedHand = 0;
 	g_ui.lastMode = static_cast<int>(toy::LastMode::Host);
+	++g_ui.hostedLobbies; // v1.0 #171 "Party Host" badge
 	g_ui.settingsDirty = true;
 	saveSettingsIfDirty();
 }
@@ -158,6 +177,35 @@ void startJoin()
 	g_ui.lastMode = static_cast<int>(toy::LastMode::Join);
 	g_ui.settingsDirty = true;
 	saveSettingsIfDirty();
+}
+
+// v1.0 #168: guided first match — Quick Duel vs one gentle bot, no events.
+void startTutorialMatch()
+{
+	toy::sessionLog("INFO", "start tutorial match");
+	toy::MatchConfig cfg;
+	cfg.mode = toy::GameMode::QuickDuel;
+	cfg.aiLevel = toy::AiLevel::Easy;
+	cfg.eventsEnabled = false;
+	cfg.freeTargeting = true;
+	cfg.turnTimerSeconds = 0;
+	cfg.paradeRest = false;
+	cfg.fillEmptyWithAI = true;
+	cfg.seed = 20261u;
+	g_session.startOffline(g_match, cfg);
+	// Seat 1 becomes the sparring bot (deck already dealt; control flip is safe).
+	g_match.players[1].control = toy::SeatControl::AI;
+	g_match.players[1].setName("Sgt. Bumble");
+	toy::bumpSync(g_match);
+	applyCosmeticsToSeat0();
+	rebuildScene();
+	g_tutorialMatch = true;
+	g_ui.tutorialStep = 0;
+	g_ui.screen = toy::AppScreen::Match;
+	g_ui.selectedHand = 0;
+	g_ui.selectedTarget = 1;
+	g_ui.matchCounted = false;
+	g_ui.timelineIndex = -1;
 }
 
 // v0.8 #86: resolve a typed room code against live LAN beacons, then join.
@@ -204,6 +252,9 @@ void processUiIntents()
 		break;
 	case -7:
 		startJoinByCode();
+		break;
+	case -8:
+		startTutorialMatch();
 		break;
 	default:
 		break;
@@ -264,6 +315,15 @@ void frame()
 
 	processUiIntents();
 
+	// v1.0 #166: manual "check updates" — open the project page in the default browser.
+	if (g_ui.wantOpenProjectUrl) {
+		g_ui.wantOpenProjectUrl = false;
+		toy::sessionLog("INFO", "open project url");
+#if defined(_WIN32)
+		ShellExecuteA(nullptr, "open", toy::kProjectUrl, nullptr, nullptr, SW_SHOWNORMAL);
+#endif
+	}
+
 	if (g_ui.wantApplyDisplay) {
 		g_ui.wantApplyDisplay = false;
 		applyFullscreenPref();
@@ -285,7 +345,12 @@ void frame()
 		g_discovery.stop();
 	}
 
-	g_session.update(g_match);
+	// v1.0 #187: photo mode freezes the offline sim entirely (networked sessions keep
+	// pumping sockets so heartbeats don't time out — only visuals/UI freeze there).
+	const bool photoFreeze = g_photoMode && g_session.mode() == toy::AppMode::Offline;
+	if (!photoFreeze) {
+		g_session.update(g_match);
+	}
 
 	// v0.8 #98: connection died (timeout / kick / version mismatch) → back to menu with reason.
 	if (g_session.connectionLost()) {
@@ -333,10 +398,64 @@ void frame()
 			++g_ui.wins;
 			g_ui.settingsDirty = true;
 		}
+		// v1.0 #168/#169: tutorial completes at match end (win or lose).
+		if (g_tutorialMatch) {
+			g_tutorialMatch = false;
+			g_ui.tutorialStep = -1;
+			if (!g_ui.tutorialDone) {
+				g_ui.tutorialDone = true;
+				g_ui.settingsDirty = true;
+				toy::uiPushToast(g_ui, "Tutorial complete — Sandbox mode unlocked!", 3.5f);
+				toy::sessionLog("INFO", "tutorial completed");
+			}
+		}
+
+		// v1.0 #170: challenge missions (evaluated once, toast on fresh completion).
+		const bool localWin = (g_match.winner >= 0 && g_match.winner == mySeat);
+		auto completeMission = [](int bit, const char* toast) {
+			if (!(g_ui.missionFlags & bit)) {
+				g_ui.missionFlags |= bit;
+				g_ui.settingsDirty = true;
+				toy::uiPushToast(g_ui, toast, 3.2f);
+				toy::sfxPlay(toy::Sfx::Win);
+			}
+		};
+		if (localWin && g_missionStormSeen) {
+			completeMission(1, "Mission complete: Storm Winner!");
+		}
+		if (g_missionHealedLocal >= 10) {
+			completeMission(2, "Mission complete: Field Medic!");
+		}
+		if (localWin && mySeat >= 0 && mySeat < g_match.config.playerCount) {
+			const toy::Player& me = g_match.players[static_cast<size_t>(mySeat)];
+			if (me.towerMaxHp > 0 && me.towerHp * 4 >= me.towerMaxHp * 3) {
+				completeMission(4, "Mission complete: Untouchable!");
+			}
+		}
+
+		// v1.0 #186: append one history line per finished match.
+		{
+			char when[32];
+			const time_t now = time(nullptr);
+			tm tmv{};
+#if defined(_WIN32)
+			localtime_s(&tmv, &now);
+#else
+			localtime_r(&now, &tmv);
+#endif
+			std::strftime(when, sizeof(when), "%Y-%m-%d %H:%M", &tmv);
+			char line[160];
+			std::snprintf(line, sizeof(line), "%s | %s | %s | winner: %s | %d turns | %s", when,
+						  toy::gameModeName(g_match.config.mode), toy::mapName(g_match.config.mapId),
+						  g_match.winner >= 0 ? g_match.players[static_cast<size_t>(g_match.winner)].name : "draw",
+						  g_match.turnNumber, localWin ? "WIN" : "loss");
+			toy::historyAppend(line);
+		}
 	}
 
 	// v0.7 #56: turn timer (authority enforces; client display approximates).
-	if (g_match.phase == toy::Phase::Playing && g_match.config.turnTimerSeconds > 0) {
+	// Paused entirely while photo mode freezes an offline match (#187).
+	if (g_match.phase == toy::Phase::Playing && g_match.config.turnTimerSeconds > 0 && !photoFreeze) {
 		if (g_lastTurnForTimer != g_match.turnNumber) {
 			g_lastTurnForTimer = g_match.turnNumber;
 			g_turnTimerAccum = 0.0f;
@@ -374,11 +493,22 @@ void frame()
 			g_fxLastHand = hands;
 			g_fxLastActive = g_match.activePlayer;
 			g_fxLastWorld = g_match.world.kind;
+			// v1.0 #170/#185: per-match trackers + favorite-map counting.
+			g_missionStormSeen = false;
+			g_missionHealedLocal = 0;
+			if (g_match.phase == toy::Phase::Playing) {
+				const int mapIdx = static_cast<int>(g_match.config.mapId);
+				if (mapIdx >= 0 && mapIdx < 7) {
+					++g_ui.mapPlays[mapIdx];
+					g_ui.settingsDirty = true;
+				}
+			}
 			// #129: intro fly-over on match start.
 			if (g_match.phase == toy::Phase::Playing && !g_ui.reducedMotion) {
 				g_flyTimer = 1.2f;
 			}
 		} else if (g_match.phase == toy::Phase::Playing || g_match.phase == toy::Phase::GameOver) {
+			const int mySeatFx = (g_session.mode() == toy::AppMode::Offline) ? 0 : g_session.localSeat();
 			size_t discards = 0, hands = 0;
 			for (int i = 0; i < g_match.config.playerCount; ++i) {
 				const toy::Player& p = g_match.players[static_cast<size_t>(i)];
@@ -388,6 +518,10 @@ void frame()
 					if (dmg >= 5 && !g_ui.reducedMotion) {
 						g_punchTimer = 0.18f; // #75
 					}
+				}
+				// v1.0 #170 "Field Medic": count local healing.
+				if (i == mySeatFx && g_fxLastHp[i] >= 0 && p.towerHp > g_fxLastHp[i]) {
+					g_missionHealedLocal += p.towerHp - g_fxLastHp[i];
 				}
 				if (p.shieldTurns > g_fxLastShield[i]) {
 					toy::sfxPlay(toy::Sfx::Shield);
@@ -421,6 +555,9 @@ void frame()
 			if (g_match.world.kind != g_fxLastWorld) {
 				g_fxLastWorld = g_match.world.kind;
 				toy::sfxEventStinger(g_match.world.kind); // #132
+				if (g_match.world.kind == toy::EventKind::Sandstorm) {
+					g_missionStormSeen = true; // #170 "Storm Winner"
+				}
 			}
 			if (g_match.phase == toy::Phase::GameOver && g_fxWinMatchId != g_match.matchId) {
 				g_fxWinMatchId = g_match.matchId;
@@ -468,15 +605,17 @@ void frame()
 			g_lastParadeTurn = g_match.turnNumber;
 			g_scene.paradeRest(g_match);
 		}
-		g_scene.consumeImpulse(g_match);
-		float stepDt = static_cast<float>(dt);
-		if (g_slowMoTimer > 0.0f) {
-			g_slowMoTimer -= static_cast<float>(dt);
-			stepDt *= 0.3f; // #74 slow-mo
+		if (!g_photoMode) { // #187: photo mode freezes physics + particles
+			g_scene.consumeImpulse(g_match);
+			float stepDt = static_cast<float>(dt);
+			if (g_slowMoTimer > 0.0f) {
+				g_slowMoTimer -= static_cast<float>(dt);
+				stepDt *= 0.3f; // #74 slow-mo
+			}
+			g_scene.step(stepDt);
+			g_scene.syncFromMatch(g_match);
+			g_scene.updateFx(g_match, static_cast<float>(dt)); // v0.9 particles/flashes (#125/#127/#128)
 		}
-		g_scene.step(stepDt);
-		g_scene.syncFromMatch(g_match);
-		g_scene.updateFx(g_match, static_cast<float>(dt)); // v0.9 particles/flashes (#125/#127/#128)
 	}
 
 	// #75 camera punch + #129 intro fly-over — temporary offsets restored after drawing.
@@ -525,7 +664,7 @@ void frame()
 	}
 	sg_end_pass();
 
-	{
+	if (!g_photoMode) { // #187: hide every UI element for clean captures
 		sg_pass pass = {};
 		pass.action.colors[0].load_action = SG_LOADACTION_LOAD;
 		pass.action.depth.load_action = SG_LOADACTION_LOAD;
@@ -559,6 +698,15 @@ void event(const sapp_event* e)
 	}
 
 	switch (e->type) {
+	// v1.0 #199: duck audio while the window is in the background.
+	case SAPP_EVENTTYPE_UNFOCUSED:
+	case SAPP_EVENTTYPE_ICONIFIED:
+		toy::audioSetDucked(true);
+		break;
+	case SAPP_EVENTTYPE_FOCUSED:
+	case SAPP_EVENTTYPE_RESTORED:
+		toy::audioSetDucked(false);
+		break;
 	case SAPP_EVENTTYPE_MOUSE_DOWN:
 		if (e->mouse_button == SAPP_MOUSEBUTTON_LEFT) {
 			g_dragging = true;
@@ -592,7 +740,8 @@ void event(const sapp_event* e)
 					g_ui.pauseOpen = !g_ui.pauseOpen;
 				}
 			} else if (g_ui.screen == toy::AppScreen::Settings || g_ui.screen == toy::AppScreen::Credits ||
-					   g_ui.screen == toy::AppScreen::Codex || g_ui.showHowToPlay) {
+					   g_ui.screen == toy::AppScreen::Codex || g_ui.screen == toy::AppScreen::Profile ||
+					   g_ui.showHowToPlay) {
 				g_ui.showHowToPlay = false;
 				g_ui.screen = toy::AppScreen::Menu;
 			}
@@ -614,6 +763,15 @@ void event(const sapp_event* e)
 			}
 		} else if (e->key_code == SAPP_KEYCODE_H) {
 			g_ui.showHowToPlay = !g_ui.showHowToPlay;
+		} else if (e->key_code == SAPP_KEYCODE_P) {
+			// v1.0 #187: photo mode (match only).
+			if (g_ui.screen == toy::AppScreen::Match || g_ui.screen == toy::AppScreen::Results) {
+				g_photoMode = !g_photoMode;
+				if (!g_photoMode) {
+					toy::uiPushToast(g_ui, "Photo mode off", 1.2f);
+				}
+				toy::sessionLogf("INFO", "photo mode %s", g_photoMode ? "on" : "off");
+			}
 		} else if (e->key_code == SAPP_KEYCODE_ENTER || e->key_code == SAPP_KEYCODE_KP_ENTER) {
 			if (g_ui.screen == toy::AppScreen::Match && g_match.phase == toy::Phase::Playing) {
 				if (!g_session.requestPlayCard(g_match, g_ui.selectedHand, g_ui.selectedTarget)) {
@@ -666,6 +824,11 @@ sapp_desc sokol_main(int /*argc*/, char* /*argv*/[])
 	toy::Settings early{};
 	const bool hasSettings = toy::settingsLoad(early);
 
+	// v1.0 #162: title carries the single-source version.
+	static char title[96];
+	std::snprintf(title, sizeof(title), "Oyuncak Asker Masa Savasi — v%s %s", toy::kVersionString,
+				  toy::kVersionCodename);
+
 	sapp_desc d = {};
 	d.init_cb = init;
 	d.frame_cb = frame;
@@ -676,7 +839,7 @@ sapp_desc sokol_main(int /*argc*/, char* /*argv*/[])
 	d.sample_count = 4;
 	d.fullscreen = hasSettings ? early.fullscreen : false;
 	d.swap_interval = (hasSettings && !early.vsync) ? 0 : 1;
-	d.window_title = "Oyuncak Asker Masa Savasi — v0.9 Identity & Content";
+	d.window_title = title;
 	d.logger.func = slog_func;
 	d.high_dpi = true;
 	return d;

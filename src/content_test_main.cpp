@@ -1,4 +1,5 @@
 #include "app/i18n.h"
+#include "app/version.h"
 #include "game/cards.h"
 #include "game/cosmetics.h"
 #include "game/events.h"
@@ -31,6 +32,14 @@ int main(int argc, char** argv)
 		const bool ok = cardsExportJson(argv[2]);
 		std::printf(ok ? "exported %s\n" : "export FAILED %s\n", argv[2]);
 		return ok ? 0 : 1;
+	}
+
+	// --- v1.0 #162: version constants agree with the string ---
+	{
+		char composed[32];
+		std::snprintf(composed, sizeof(composed), "%d.%d.%d", kVersionMajor, kVersionMinor, kVersionPatch);
+		CHECK(std::strcmp(composed, kVersionString) == 0, "version constants match kVersionString");
+		std::printf("OK version %s '%s'\n", kVersionString, kVersionCodename);
 	}
 
 	// --- Catalog ≥ 30, TR text complete (#153), localized lookup ---

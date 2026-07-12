@@ -11,7 +11,7 @@ int main()
 {
 	using namespace toy;
 
-	constexpr int kTrials = 80;
+	constexpr int kTrials = 200; // v1.0 #174: full-regression sample size
 	constexpr MapId kMaps[] = { MapId::LivingRoom, MapId::Desert, MapId::Backyard };
 	constexpr TowerType kTowers[] = { TowerType::MachineGun, TowerType::Sniper };
 

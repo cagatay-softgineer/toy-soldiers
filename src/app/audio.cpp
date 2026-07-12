@@ -48,6 +48,8 @@ struct AudioState {
 	float masterVol = 1.0f;
 	float sfxVol = 0.8f;
 	float musicVol = 0.5f;
+	float duck = 1.0f;       // smoothed toward duckTarget in the callback (#199)
+	float duckTarget = 1.0f;
 	bool ready = false;
 };
 
@@ -176,6 +178,8 @@ void streamCb(float* buffer, int numFrames, int numChannels)
 	musicTick(static_cast<float>(numFrames) * dt);
 
 	for (int f = 0; f < numFrames; ++f) {
+		// #199: ~50ms exponential glide toward the duck target — no clicks on focus change.
+		g_audio.duck += (g_audio.duckTarget - g_audio.duck) * 0.0005f;
 		float s = 0.0f;
 		for (Voice& v : g_audio.voices) {
 			if (!v.active) {
@@ -200,7 +204,7 @@ void streamCb(float* buffer, int numFrames, int numChannels)
 				s += sampleWave(v) * vol;
 			}
 		}
-		s *= g_audio.masterVol;
+		s *= g_audio.masterVol * g_audio.duck;
 		// Soft clip.
 		if (s > 1.0f) {
 			s = 1.0f;
@@ -250,6 +254,12 @@ void audioSetVolumes(float master, float sfx, float music)
 	g_audio.masterVol = clamp01(master);
 	g_audio.sfxVol = clamp01(sfx);
 	g_audio.musicVol = clamp01(music);
+}
+
+void audioSetDucked(bool ducked)
+{
+	std::lock_guard<std::mutex> guard(g_audio.lock);
+	g_audio.duckTarget = ducked ? 0.15f : 1.0f; // #199
 }
 
 void sfxPlay(Sfx s)

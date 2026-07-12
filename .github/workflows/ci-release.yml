@@ -1,15 +1,26 @@
-# Continuous CI + GitHub Release on every push to main.
-# Tag: v0.0.0-dev.<run_number>+<short_sha>
-# Pre-release by default (dev channel until v1.0).
+# CI + releases for toy-soldiers.
+#
+# - Every push/PR: build + full verify gate on Windows, package the portable zip.
+# - Push to main: rolling "continuous" pre-release (single tag, updated in place).
+# - Push a v* tag (or dispatch with publish_tag): real versioned GitHub Release.
+#
+# Box3D is PINNED (BOX3D_REF below). Unpinned upstream HEAD broke the v1.0.0
+# build minutes after a green run — bump the pin deliberately, never float it.
 
-name: CI & Continuous Release
+name: CI & Release
 
 on:
   push:
     branches: [main, master]
+    tags: ['v*']
   pull_request:
     branches: [main, master]
   workflow_dispatch:
+    inputs:
+      publish_tag:
+        description: "Existing tag to (re)publish as a versioned release (e.g. v1.0.0)"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -18,26 +29,38 @@ concurrency:
   group: ci-release-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # erincatto/box3d commit the game is developed against (matches the local sibling drop).
+  BOX3D_REF: e9f6f1d0aa5ebd94dfb939838a6b102c09113ca2
+
 jobs:
   test:
-    name: Build & test (Windows)
+    name: Build, verify & package (Windows)
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
       - name: Checkout toy-soldiers
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
-      - name: Checkout Box3D (sibling dependency)
-        uses: actions/checkout@v4
+      - name: Checkout Box3D (pinned)
+        uses: actions/checkout@v7
         with:
           repository: erincatto/box3d
+          ref: ${{ env.BOX3D_REF }}
           path: box3d-src
 
+      # FetchContent (imgui) populates into <box3d>/.fetchcontent-cache — cache it.
+      - name: Cache FetchContent
+        uses: actions/cache@v6
+        with:
+          path: box3d-src/.fetchcontent-cache
+          key: fetchcontent-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
+
       - name: Setup CMake
-        uses: lukka/get-cmake@latest
+        uses: lukka/get-cmake@v4.3.3
 
       - name: Setup Ninja
-        uses: seanmiddleditch/gha-setup-ninja@v5
+        uses: seanmiddleditch/gha-setup-ninja@v6
 
       - name: Setup MSVC environment
         uses: ilammy/msvc-dev-cmd@v1
@@ -55,77 +78,121 @@ jobs:
       - name: Build Release
         run: cmake --build build --parallel
 
-      - name: Verify (scripts/verify.ps1)
+      - name: Verify (8 headless gates)
         shell: pwsh
         run: |
           powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1 -Configuration Release -BuildDir build
 
-      - name: Stage artifacts
+      - name: Package portable zip
         shell: pwsh
         run: |
-          $bin = "build/bin"
-          if (-not (Test-Path "$bin/toy_sim.exe")) { $bin = "build/bin/Release" }
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Copy-Item "$bin/*.exe" dist/ -ErrorAction SilentlyContinue
-          Copy-Item README.md, CHANGELOG.md, LICENSE dist/ -ErrorAction SilentlyContinue
-          Copy-Item -Recurse docs dist/docs -ErrorAction SilentlyContinue
+          # package.ps1 probes build/bin/<Config>; Ninja is single-config (build/bin) — normalize.
+          if ((Test-Path "build/bin/toy_soldiers.exe") -and -not (Test-Path "build/bin/Release/toy_soldiers.exe")) {
+            New-Item -ItemType Directory -Force "build/bin/Release" | Out-Null
+            Copy-Item "build/bin/toy_soldiers.exe" "build/bin/Release/" -Force
+          }
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package.ps1
+          Get-ChildItem dist
 
-      - name: Upload Windows artifacts
+      - name: Job summary
         if: always()
-        uses: actions/upload-artifact@v4
+        shell: pwsh
+        run: |
+          "## toy-soldiers CI" >> $env:GITHUB_STEP_SUMMARY
+          "- Box3D pin: ``${{ env.BOX3D_REF }}``" >> $env:GITHUB_STEP_SUMMARY
+          $zip = Get-ChildItem dist/*.zip -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($zip) { "- Package: ``$($zip.Name)`` ($([math]::Round($zip.Length / 1MB, 2)) MB)" >> $env:GITHUB_STEP_SUMMARY }
+          if (Test-Path balance_report.csv) {
+            $rows = (Get-Content balance_report.csv | Measure-Object -Line).Lines - 1
+            "- Balance trials in CSV: $rows" >> $env:GITHUB_STEP_SUMMARY
+          }
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v7
         with:
-          name: toy-soldiers-windows-Release
-          path: dist/**
-          if-no-files-found: warn
+          name: toy-soldiers-win64
+          path: dist/*.zip
+          if-no-files-found: error
 
   continuous-release:
-    name: Publish continuous release
+    name: Rolling continuous pre-release
     needs: test
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+        uses: actions/checkout@v7
 
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
+      - name: Download package
+        uses: actions/download-artifact@v8
         with:
-          name: toy-soldiers-windows-Release
+          name: toy-soldiers-win64
           path: dist
 
-      - name: Package zip
-        run: |
-          cd dist
-          zip -r ../toy-soldiers-windows.zip . || python -c "import shutil; shutil.make_archive('../toy-soldiers-windows','zip','./')"
-
-      - name: Create continuous GitHub Release
+      # One rolling tag instead of an ever-growing v0.0.0-dev.* pile.
+      - name: Update "continuous" pre-release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
           SHORT_SHA="${GITHUB_SHA::7}"
-          RUN="${GITHUB_RUN_NUMBER}"
-          TAG="v0.0.0-dev.${RUN}+${SHORT_SHA}"
-          TITLE="Continuous ${TAG}"
-          NOTES="## Continuous release (auto)
+          NOTES="## Continuous build (auto, dev channel)
 
           - **Commit:** \`${GITHUB_SHA}\`
-          - **Branch:** \`${GITHUB_REF_NAME}\`
-          - **Run:** [#${RUN}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})
-          - **Channel:** pre-release / dev
+          - **Run:** [#${GITHUB_RUN_NUMBER}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})
 
-          Built on \`windows-latest\` after headless tests.
-          Roadmap: [docs/ROADMAP_to_v1.md](docs/ROADMAP_to_v1.md)
-          "
+          Latest main build after the full verify gate. For stable builds use the
+          versioned releases (v1.0.0+)."
 
-          gh release delete "$TAG" -y 2>/dev/null || true
-          git push origin ":refs/tags/$TAG" 2>/dev/null || true
-
-          gh release create "$TAG" \
-            --title "$TITLE" \
+          gh release delete continuous -y 2>/dev/null || true
+          git push origin ":refs/tags/continuous" 2>/dev/null || true
+          gh release create continuous \
+            --title "Continuous build (${SHORT_SHA})" \
             --notes "$NOTES" \
             --prerelease \
             --target "$GITHUB_SHA" \
-            toy-soldiers-windows.zip
+            dist/*.zip
+
+  versioned-release:
+    name: Versioned release
+    needs: test
+    if: >
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish_tag != '')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Download package
+        uses: actions/download-artifact@v8
+        with:
+          name: toy-soldiers-win64
+          path: dist
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.publish_tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          if ! git rev-parse "refs/tags/$TAG" >/dev/null 2>&1; then
+            git fetch origin "refs/tags/$TAG:refs/tags/$TAG"
+          fi
+          NOTES="See [CHANGELOG.md](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/blob/$TAG/CHANGELOG.md) for the full notes.
+
+          Portable Windows build — extract and run \`toy_soldiers.exe\`. No installation, no internet required."
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/*.zip --clobber
+          else
+            gh release create "$TAG" \
+              --title "$TAG" \
+              --notes "$NOTES" \
+              --verify-tag \
+              dist/*.zip
+          fi

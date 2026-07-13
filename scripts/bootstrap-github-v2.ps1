@@ -161,34 +161,40 @@ $($f.Title)
     continue
   }
 
-  $labelPri = "priority:$($f.Priority)"
-  $out = gh issue create --repo $Repo `
-    --title $issueTitle `
-    --body $body `
-    --label "type:feature" `
-    --label "roadmap:v2" `
-    --label $labelPri `
-    --milestone $msTitle 2>&1
+  # Create via `gh api --input -`: the entire request is a JSON body piped over
+  # stdin, so titles/bodies with embedded quotes, em-dashes, parens, backticks
+  # etc. never touch PowerShell's native-argument quoting. Milestone is passed by
+  # number (REST API requirement), resolved above into $milestoneNumber.
+  $payload = [ordered]@{
+    title  = $issueTitle
+    body   = $body
+    labels = @("type:feature", "roadmap:v2", "priority:$($f.Priority)")
+  }
+  $msNum = $milestoneNumber[$msTitle]
+  if ($msNum) { $payload.milestone = [int]$msNum }
+  $json = ($payload | ConvertTo-Json -Depth 5 -Compress)
+  # Write the JSON body as UTF-8 WITHOUT a BOM to a temp file and feed it via
+  # `--input <file>`. Piping to `--input -` from PowerShell 5.1 corrupts non-ASCII
+  # (em-dashes etc.) and a BOM makes GitHub reject the JSON — a file sidesteps both.
+  $tmp = Join-Path $env:TEMP ("ts_issue_{0}.json" -f $f.Id)
+  [System.IO.File]::WriteAllText($tmp, $json, (New-Object System.Text.UTF8Encoding($false)))
 
+  $out = (gh api "repos/$Repo/issues" --input $tmp -q ".html_url" 2>&1)
   if ($LASTEXITCODE -ne 0) {
-    Start-Sleep -Milliseconds 800
-    $out = gh issue create --repo $Repo `
-      --title $issueTitle `
-      --body $body `
-      --label "type:feature" `
-      --label "roadmap:v2" `
-      --label $labelPri `
-      --milestone $msTitle 2>&1
+    Start-Sleep -Milliseconds 1500
+    $out = (gh api "repos/$Repo/issues" --input $tmp -q ".html_url" 2>&1)
     if ($LASTEXITCODE -ne 0) {
       Write-Host "FAIL #$($f.Id): $out"
       $failCount++
+      Remove-Item $tmp -ErrorAction SilentlyContinue
       continue
     }
   }
+  Remove-Item $tmp -ErrorAction SilentlyContinue
 
   Write-Host "Created: $out"
   $createdCount++
-  Start-Sleep -Milliseconds 300
+  Start-Sleep -Milliseconds 350
 }
 
 Write-Host ""

@@ -4,7 +4,7 @@
 ; The portable zip remains the primary distribution; this is the one-click option.
 
 #define AppName "Oyuncak Asker Masa Savasi"
-#define AppVersion "1.1.0"
+#define AppVersion "1.2.0"
 #define AppPublisher "preunec / cagatay-softgineer"
 #define AppURL "https://github.com/cagatay-softgineer/toy-soldiers"
 #define StageDir "..\dist\toy-soldiers-v" + AppVersion

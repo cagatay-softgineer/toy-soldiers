@@ -1,8 +1,10 @@
 #pragma once
 
 #include "game/match.h"
+#include "game/replay.h"
 #include "net/protocol.h"
 #include "net/socket.h"
+#include "net/transport.h"
 
 #include <array>
 #include <chrono>
@@ -59,8 +61,14 @@ public:
 	// Host: open TCP listen, claim seat 0, start UDP beacon (#85).
 	bool hostLobby(Match& match, const MatchConfig& cfg, const char* hostName, uint16_t port = kDefaultPort);
 
-	// Client: connect to host.
-	bool joinLobby(Match& match, const char* host, uint16_t port, const char* playerName);
+	// Client: connect to host. spectate = seatless read-only client (v1.2 #111).
+	bool joinLobby(Match& match, const char* host, uint16_t port, const char* playerName, bool spectate = false);
+	bool isSpectator() const { return mode_ == AppMode::Client && localSeat_ == kSpectatorSeat; }
+
+	// v1.2 #89: pick how joinLobby establishes its connection. DirectTcp (default)
+	// dials the peer's IP:port directly; see net/transport.h for what Relay needs.
+	void setTransport(const net::TransportConfig& cfg) { transportConfig_ = cfg; }
+	const net::TransportConfig& transport() const { return transportConfig_; }
 
 	void shutdown(Match* match = nullptr);
 
@@ -90,6 +98,41 @@ public:
 	// v0.8 #79: kick a remote seat / open-close the lobby.
 	bool hostKick(Match& match, int seat, const char* reason = "kicked by host");
 	bool hostSetLobbyLocked(Match& match, bool locked);
+	// v1.2 #84: host-picked lobby banner color.
+	bool hostSetBannerColor(Match& match, uint8_t color);
+
+	// --- v1.2 #101/#102: host migration ---
+	struct MigrationPlan {
+		enum class Role : uint8_t { None, BecomeHost, JoinNewHost };
+		Role role = Role::None;
+		int newHostSeat = -1;
+		char ip[40] = {};
+		uint16_t port = 0;
+	};
+	// Pure decision from the last known match state: the lowest surviving human seat
+	// (old host seat 0 excluded) becomes the new host; everyone else rejoins its peer IP.
+	MigrationPlan planMigration(const Match& lastState, uint16_t knownHostPort) const;
+	// Become the new authority over the CURRENT match state (lobby or mid-match).
+	// Opens listener+beacon, converts the vanished host seat to AI, and holds a 30s
+	// window where survivors reattach to their old seats by display name.
+	bool hostAdoptMatch(Match& match, uint16_t port, const char* myName);
+
+	// v1.2 #107: host-authority action recording — every applyCardPlay/endTurn actually
+	// resolved on this side (local human, AI, or an accepted remote client intent) is
+	// logged. No-op for Client mode (its requests are not yet authoritative). Pass
+	// nullptr to stop recording; caller owns the ReplayRecorder's lifetime.
+	void setReplayRecorder(ReplayRecorder* recorder) { replayRecorder_ = recorder; }
+
+	// Offline "Auto Play"/Space hotkey path — routed here (instead of the free function)
+	// so the active replay recorder, if any, sees these plays too (#107).
+	bool autoPlay(Match& match)
+	{
+		const bool ok = autoPlayBest(match, replayRecorder_);
+		if (ok) {
+			bumpSync(match);
+		}
+		return ok;
+	}
 
 	bool canLocalAct(const Match& match) const;
 	bool isLocalSeat(int seat) const { return seat == localSeat_; }
@@ -130,6 +173,7 @@ private:
 		Clock::time_point lastRecv{};
 		Clock::time_point lastChat{};
 		Clock::time_point lastIntent{};
+		char ip[64] = {}; // v1.2 #101: peer address from accept()
 	};
 
 	void setError(const char* msg);
@@ -145,6 +189,8 @@ private:
 	void hostTickBeaconAndHeartbeat(Match& match);
 	void clientPump(Match& match);
 	void applyRemoteSnapshot(Match& match, const uint8_t* data, size_t size, bool isLobby);
+	void applyRemoteDelta(Match& match, const uint8_t* data, size_t size); // v1.2 #96
+	void adoptRemoteState(Match& match, Match&& next);
 	int allocateSeat(Match& match) const;
 	void maybeFinishRematchVote(Match& match);
 	uint32_t nowMs() const;
@@ -166,6 +212,7 @@ private:
 	net::SendQueue clientSendQ_;
 	bool clientWelcomed_ = false;
 	std::string lastError_;
+	net::TransportConfig transportConfig_; // v1.2 #89: DirectTcp until a relay backend exists
 
 	// --- v0.8 state ---
 	Clock::time_point startTime_{};
@@ -185,6 +232,15 @@ private:
 	uint32_t clientToken_ = 0;   // reconnect token from Welcome
 	uint32_t nextIntentId_ = 1;  // #94
 	Clock::time_point clientLastRecv_{};
+	bool spectateRequested_ = false; // v1.2 #111
+	// v1.2 #96: last broadcast state for delta diffing.
+	Match lastBroadcast_{};
+	bool lastBroadcastValid_ = false;
+	// v1.2 #101/#102: post-migration name-reclaim window.
+	Clock::time_point migrationDeadline_{};
+	bool migrationWindow_ = false;
+	// v1.2 #107: not owned — caller keeps the recorder alive for the match's duration.
+	ReplayRecorder* replayRecorder_ = nullptr;
 	Clock::time_point clientLastChat_{};
 	bool connectionLost_ = false;
 	std::string connectionLostReason_;

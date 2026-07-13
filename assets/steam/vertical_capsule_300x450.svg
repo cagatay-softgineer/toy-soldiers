@@ -1,0 +1,28 @@
+<svg width="300" height="450" viewBox="0 0 300 450" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="12%" r="90%">
+      <stop offset="0%" stop-color="#1c2340"/>
+      <stop offset="55%" stop-color="#12162a"/>
+      <stop offset="100%" stop-color="#0a0c18"/>
+    </radialGradient>
+    <radialGradient id="glow" cx="50%" cy="8%" r="55%">
+      <stop offset="0%" stop-color="#f5c45d" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#f5c45d" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="300" height="450" fill="url(#bg)"/>
+  <rect width="300" height="450" fill="url(#glow)"/>
+
+  <text x="150" y="90" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="800" font-size="34" fill="#f7f7fb">TOY SOLDIERS</text>
+  <text x="150" y="128" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="800" font-size="34" fill="#f5c45d">TABLETOP</text>
+  <rect x="110" y="148" width="80" height="3" rx="1.5" fill="#f5c45d"/>
+
+  <ellipse cx="150" cy="330" rx="130" ry="105" fill="#1f3d2c" stroke="#5a3a22" stroke-width="7"/>
+  <rect x="138" y="255" width="24" height="42" rx="5" fill="#f5c45d"/>
+  <rect x="145" y="230" width="13" height="26" rx="4" fill="#f5c45d"/>
+  <rect x="80" y="300" width="20" height="36" rx="4" fill="#7db6ff"/>
+  <rect x="200" y="310" width="20" height="36" rx="4" fill="#ff7b8f"/>
+  <rect x="150" y="370" width="20" height="36" rx="4" fill="#6ee7a8"/>
+
+  <text x="150" y="424" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="14" fill="#aeb4cf">Physics. Cards. Chaos on the carpet.</text>
+</svg>

@@ -143,6 +143,13 @@ const Entry kTable[] = {
 	{ "settings.felt_dye", "Felt dye (table tint)", "Kece boyasi (masa tonu)" },
 	{ "settings.felt_dye_hint", "Local only — applies fully at the next match.",
 	  "Sadece bu cihazda — bir sonraki macta tam uygulanir." },
+	{ "settings.custom_hex", "Custom plastic hex (local)", "Ozel plastik hex (yerel)" },
+	{ "settings.detailed_soldiers", "Detailed soldier figures", "Detayli asker figurleri" },
+	{ "settings.save_replays", "Save match replays (.toyrec)", "Mac tekrarlarini kaydet (.toyrec)" },
+	{ "lobby.featured_apply", "Apply featured tweak", "Onerilen ayari uygula" },
+	{ "menu.spectate", "Join as spectator (watch only)", "Izleyici olarak katil (sadece izle)" },
+	{ "lobby.spectating", "You are spectating - sit back and enjoy the chaos.",
+	  "Izleyicisin - arkana yaslan ve kaosu izle." },
 	{ "settings.master_vol", "Master volume", "Ana ses" },
 	{ "settings.sfx_vol", "SFX volume", "Efekt sesi" },
 	{ "settings.music_vol", "Music volume", "Muzik sesi" },
@@ -163,6 +170,7 @@ const Entry kTable[] = {
 	{ "results.change_loadout", "Change loadout", "Yuklemeyi degistir" },
 	{ "results.menu", "Main Menu", "Ana Menu" },
 	{ "results.rematch", "Rematch", "Rovans" },
+	{ "results.export_card", "Export result card (PNG)", "Sonuc kartini disa aktar (PNG)" },
 	{ "glossary.title", "Glossary", "Sozluk" },
 	{ "glossary.shield", "Shield: halves incoming attack damage (round up). Blocks flood chip fully.",
 	  "Kalkan: gelen saldiri hasarini yariya indirir (yukari yuvarlar). Sel hasarini tamamen engeller." },
@@ -192,6 +200,75 @@ const char* pick(const Entry& e)
 	return g_lang == Lang::Tr ? e.tr : e.en;
 }
 
+// v1.2 #157: DE/IT stub overrides — core navigation only, EN fallback for the rest.
+struct Stub {
+	const char* key;
+	const char* text;
+};
+
+const Stub kTableDe[] = {
+	{ "menu.play_offline", "Offline spielen (Hotseat)" },
+	{ "menu.host", "Lobby eroeffnen (Host)" },
+	{ "menu.join", "Host beitreten" },
+	{ "menu.settings", "Einstellungen" },
+	{ "menu.howto", "Spielanleitung" },
+	{ "menu.credits", "Mitwirkende" },
+	{ "menu.quit", "Beenden" },
+	{ "menu.tutorial", "Tutorial (erstes Match)" },
+	{ "menu.codex", "Kartenkodex" },
+	{ "menu.profile", "Profil & Abzeichen" },
+	{ "settings.title", "Einstellungen" },
+	{ "settings.language", "Sprache" },
+	{ "lobby.start", "Match starten" },
+	{ "lobby.ready", "Bereit" },
+	{ "lobby.leave", "Zurueck zum Menue" },
+	{ "match.play", "Gewaehlte Karte spielen" },
+	{ "match.end_turn", "Zug beenden" },
+	{ "results.menu", "Hauptmenue" },
+};
+
+const Stub kTableIt[] = {
+	{ "menu.play_offline", "Gioca offline (Hotseat)" },
+	{ "menu.host", "Apri lobby (Host)" },
+	{ "menu.join", "Unisciti all'host" },
+	{ "menu.settings", "Impostazioni" },
+	{ "menu.howto", "Come si gioca" },
+	{ "menu.credits", "Crediti" },
+	{ "menu.quit", "Esci" },
+	{ "menu.tutorial", "Tutorial (prima partita)" },
+	{ "menu.codex", "Codice delle carte" },
+	{ "menu.profile", "Profilo e distintivi" },
+	{ "settings.title", "Impostazioni" },
+	{ "settings.language", "Lingua" },
+	{ "lobby.start", "Avvia partita" },
+	{ "lobby.ready", "Pronto" },
+	{ "lobby.leave", "Torna al menu" },
+	{ "match.play", "Gioca la carta scelta" },
+	{ "match.end_turn", "Fine turno" },
+	{ "results.menu", "Menu principale" },
+};
+
+const char* stubLookup(const char* key)
+{
+	const Stub* table = nullptr;
+	size_t n = 0;
+	if (g_lang == Lang::De) {
+		table = kTableDe;
+		n = sizeof(kTableDe) / sizeof(kTableDe[0]);
+	} else if (g_lang == Lang::It) {
+		table = kTableIt;
+		n = sizeof(kTableIt) / sizeof(kTableIt[0]);
+	} else {
+		return nullptr;
+	}
+	for (size_t i = 0; i < n; ++i) {
+		if (std::strcmp(table[i].key, key) == 0) {
+			return table[i].text;
+		}
+	}
+	return nullptr;
+}
+
 } // namespace
 
 void i18nSetLang(Lang lang)
@@ -208,6 +285,18 @@ const char* tr(const char* key)
 {
 	if (!key) {
 		return "";
+	}
+	// v1.2 #157: DE/IT check their stub table first, then fall through to EN.
+	if (g_lang == Lang::De || g_lang == Lang::It) {
+		if (const char* s = stubLookup(key)) {
+			return s;
+		}
+		for (const Entry& e : kTable) {
+			if (std::strcmp(e.key, key) == 0) {
+				return e.en;
+			}
+		}
+		return key;
 	}
 	for (const Entry& e : kTable) {
 		if (std::strcmp(e.key, key) == 0) {

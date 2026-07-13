@@ -6,6 +6,7 @@
 #include <cassert>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <deque>
 #include <string>
 #include <sys/stat.h>
@@ -498,6 +499,25 @@ uint32_t deckCheckHash(const std::vector<CardInstance>& deck)
 		h = fnv1a(reinterpret_cast<const uint8_t*>(&id), sizeof(id), h);
 	}
 	return h;
+}
+
+void featuredWeeklyTweak(int& banDefOut, int& addDefOut, char* textOut, int textCap, long long weekOverride)
+{
+	// Rotate over commons to ban and sideboard cards to try.
+	static const int kBanPool[] = { 1, 5, 10, 13, 20, 23 };
+	static const int kAddPool[] = { 9, 15, 16, 28, 29, 33, 34 };
+	long long week = weekOverride;
+	if (week < 0) {
+		week = static_cast<long long>(std::time(nullptr)) / (86400LL * 7LL);
+	}
+	banDefOut = kBanPool[static_cast<size_t>(week % 6)];
+	addDefOut = kAddPool[static_cast<size_t>(week % 7)];
+	if (textOut && textCap > 0) {
+		const CardDef* ban = findCard(banDefOut);
+		const CardDef* add = findCard(addDefOut);
+		std::snprintf(textOut, static_cast<size_t>(textCap), "Featured tweak: bench %s, field-test %s",
+					  ban ? ban->name : "?", add ? add->name : "?");
+	}
 }
 
 uint32_t xorshift32(uint32_t& state)

@@ -223,6 +223,11 @@ std::vector<uint8_t> serializeMatch(const Match& match)
 	w.i32(match.crownSeat);
 	// v0.8
 	w.u8(match.lobbyLocked ? 1 : 0);
+	// v1.2 (protocol v7)
+	w.u8(match.bannerColor);
+	for (int i = 0; i < kMaxPlayers; ++i) {
+		w.bytes(match.peerIp[i], sizeof(match.peerIp[i]));
+	}
 
 	for (int i = 0; i < kMaxPlayers; ++i) {
 		writePlayer(w, match.players[static_cast<size_t>(i)]);
@@ -294,6 +299,11 @@ bool deserializeMatch(Match& match, const uint8_t* data, size_t size)
 	m.eventCooldown = r.i32();
 	m.crownSeat = r.i32();
 	m.lobbyLocked = r.u8() != 0;
+	m.bannerColor = r.u8();
+	for (int i = 0; i < kMaxPlayers; ++i) {
+		r.bytes(m.peerIp[i], sizeof(m.peerIp[i]));
+		m.peerIp[i][sizeof(m.peerIp[i]) - 1] = '\0';
+	}
 
 	for (int i = 0; i < kMaxPlayers; ++i) {
 		if (!readPlayer(r, m.players[static_cast<size_t>(i)])) {
@@ -330,6 +340,192 @@ bool deserializeMatch(Match& match, const uint8_t* data, size_t size)
 	}
 	match = std::move(m);
 	return true;
+}
+
+// --- v1.2 #96: player-level delta snapshots ---
+// Payload: magic 'TOYD', u16 version, u32 baseSync, u32 matchId, [core block],
+// u8 dirtyMask, [dirty players], [log tail], [impulse]. Client applies only when
+// its current state matches (matchId, baseSync); anything else asks for a resync.
+
+namespace {
+
+constexpr uint32_t kDeltaMagic = 0x44594F54u; // 'TOYD'
+
+void writeCore(Writer& w, const Match& match)
+{
+	w.u8(static_cast<uint8_t>(match.phase));
+	w.i32(match.activePlayer);
+	w.i32(match.turnNumber);
+	w.i32(match.winner);
+	w.u32(match.rng);
+	w.i32(match.nextInstanceId);
+	w.i32(match.nextSoldierId);
+	w.u32(match.syncGeneration);
+	w.u32(match.matchId);
+	w.i32(match.config.playerCount);
+	w.u8(match.config.freeTargeting ? 1 : 0);
+	w.u32(match.config.seed);
+	w.u8(match.config.fillEmptyWithAI ? 1 : 0);
+	w.u8(static_cast<uint8_t>(match.config.mapId));
+	w.u8(match.config.eventsEnabled ? 1 : 0);
+	w.u8(static_cast<uint8_t>(match.config.mode));
+	w.u8(static_cast<uint8_t>(match.config.aiLevel));
+	w.i32(match.config.turnTimerSeconds);
+	w.u8(match.config.paradeRest ? 1 : 0);
+	w.u8(static_cast<uint8_t>(match.world.kind));
+	w.i32(match.world.remainingTurns);
+	w.i32(match.world.focusSeat);
+	w.u8(match.world.warning ? 1 : 0);
+	w.i32(match.eventCooldown);
+	w.i32(match.crownSeat);
+	w.u8(match.lobbyLocked ? 1 : 0);
+	w.u8(match.bannerColor);
+}
+
+void readCore(Reader& r, Match& m)
+{
+	m.phase = static_cast<Phase>(r.u8());
+	m.activePlayer = r.i32();
+	m.turnNumber = r.i32();
+	m.winner = r.i32();
+	m.rng = r.u32();
+	m.nextInstanceId = r.i32();
+	m.nextSoldierId = r.i32();
+	m.syncGeneration = r.u32();
+	m.matchId = r.u32();
+	m.config.playerCount = r.i32();
+	m.config.freeTargeting = r.u8() != 0;
+	m.config.seed = r.u32();
+	m.config.fillEmptyWithAI = r.u8() != 0;
+	m.config.mapId = static_cast<MapId>(r.u8());
+	m.config.eventsEnabled = r.u8() != 0;
+	m.config.mode = static_cast<GameMode>(r.u8());
+	m.config.aiLevel = static_cast<AiLevel>(r.u8());
+	m.config.turnTimerSeconds = r.i32();
+	m.config.paradeRest = r.u8() != 0;
+	m.world.kind = static_cast<EventKind>(r.u8());
+	m.world.remainingTurns = r.i32();
+	m.world.focusSeat = r.i32();
+	m.world.warning = r.u8() != 0;
+	m.eventCooldown = r.i32();
+	m.crownSeat = r.i32();
+	m.lobbyLocked = r.u8() != 0;
+	m.bannerColor = r.u8();
+}
+
+void writeLogTail(Writer& w, const Match& match)
+{
+	const int logN = static_cast<int>(match.log.size());
+	const int start = logN > 24 ? logN - 24 : 0;
+	w.u16(static_cast<uint16_t>(logN - start));
+	for (int i = start; i < logN; ++i) {
+		const MatchEvent& e = match.log[static_cast<size_t>(i)];
+		w.u8(static_cast<uint8_t>(e.type));
+		w.i32(e.actor);
+		w.i32(e.target);
+		w.i32(e.value);
+		const uint16_t len = static_cast<uint16_t>(e.text.size() > 200 ? 200 : e.text.size());
+		w.u16(len);
+		w.bytes(e.text.data(), len);
+	}
+}
+
+bool readLogTail(Reader& r, Match& m)
+{
+	const uint16_t logCount = r.u16();
+	m.log.clear();
+	m.log.reserve(logCount);
+	for (uint16_t i = 0; i < logCount && r.ok; ++i) {
+		MatchEvent e;
+		e.type = static_cast<MatchEvent::Type>(r.u8());
+		e.actor = r.i32();
+		e.target = r.i32();
+		e.value = r.i32();
+		const uint16_t len = r.u16();
+		if (r.left() < len) {
+			return false;
+		}
+		e.text.assign(reinterpret_cast<const char*>(r.p), len);
+		r.p += len;
+		m.log.push_back(std::move(e));
+	}
+	return r.ok;
+}
+
+std::vector<uint8_t> playerBlob(const Player& p)
+{
+	Writer w;
+	writePlayer(w, p);
+	return w.buf;
+}
+
+} // namespace
+
+std::vector<uint8_t> serializeMatchDelta(const Match& match, const Match& prev)
+{
+	Writer w;
+	w.u32(kDeltaMagic);
+	w.u16(kProtocolVersion);
+	w.u32(prev.syncGeneration);
+	writeCore(w, match);
+
+	uint8_t dirty = 0;
+	std::vector<uint8_t> blobs[kMaxPlayers];
+	for (int i = 0; i < kMaxPlayers; ++i) {
+		blobs[i] = playerBlob(match.players[static_cast<size_t>(i)]);
+		const std::vector<uint8_t> prevBlob = playerBlob(prev.players[static_cast<size_t>(i)]);
+		if (blobs[i] != prevBlob || match.players[static_cast<size_t>(i)].id != prev.players[static_cast<size_t>(i)].id) {
+			dirty |= static_cast<uint8_t>(1 << i);
+		}
+	}
+	w.u8(dirty);
+	for (int i = 0; i < kMaxPlayers; ++i) {
+		if (dirty & (1 << i)) {
+			w.bytes(blobs[i].data(), blobs[i].size());
+			w.i32(match.players[static_cast<size_t>(i)].id);
+		}
+	}
+	writeLogTail(w, match);
+	w.i32(match.pendingPhysicsImpulse.targetPlayer);
+	uint32_t bits = 0;
+	std::memcpy(&bits, &match.pendingPhysicsImpulse.strength, 4);
+	w.u32(bits);
+	w.i32(match.pendingPhysicsImpulse.frames);
+	return w.buf;
+}
+
+DeltaResult applyMatchDelta(Match& match, const uint8_t* data, size_t size)
+{
+	Reader r(data, size);
+	if (r.u32() != kDeltaMagic || r.u16() != kProtocolVersion) {
+		return DeltaResult::Bad;
+	}
+	const uint32_t baseSync = r.u32();
+	if (baseSync != match.syncGeneration) {
+		return DeltaResult::NeedResync; // #92 path: base mismatch — ask for a full snapshot
+	}
+	const uint32_t prevMatchId = match.matchId;
+	readCore(r, match);
+	if (match.matchId != prevMatchId) {
+		return DeltaResult::NeedResync; // deltas never span matches
+	}
+	const uint8_t dirty = r.u8();
+	for (int i = 0; i < kMaxPlayers; ++i) {
+		if (dirty & (1 << i)) {
+			if (!readPlayer(r, match.players[static_cast<size_t>(i)])) {
+				return DeltaResult::Bad;
+			}
+			match.players[static_cast<size_t>(i)].id = r.i32();
+		}
+	}
+	if (!readLogTail(r, match)) {
+		return DeltaResult::Bad;
+	}
+	match.pendingPhysicsImpulse.targetPlayer = r.i32();
+	const uint32_t bits = r.u32();
+	std::memcpy(&match.pendingPhysicsImpulse.strength, &bits, 4);
+	match.pendingPhysicsImpulse.frames = r.i32();
+	return r.ok ? DeltaResult::Ok : DeltaResult::Bad;
 }
 
 std::vector<uint8_t> serializeLobby(const Match& match)

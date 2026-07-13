@@ -18,7 +18,8 @@ constexpr int kDefaultTowerHp = 30;
 constexpr int kMaxHandSize = 8;
 constexpr int kPlayerNameLen = 24;
 constexpr uint16_t kDefaultPort = 27123;
-constexpr uint16_t kProtocolVersion = 6; // v0.8: heartbeat/ping, tokens, intent ids, lobby lock
+constexpr uint16_t kProtocolVersion = 7; // v1.2: spectators, lz4 snapshots, deltas, migration, banner
+constexpr int kSpectatorSeat = -3;       // v1.2 #111: seatless read-only client
 constexpr uint16_t kBeaconPort = 27124;  // v0.8 #85: UDP LAN discovery
 constexpr int kRoomCodeLen = 5;          // 4 letters + NUL
 
@@ -109,6 +110,7 @@ enum class EventKind : uint8_t {
 	Dog = 5,       // v0.7 #66: pushes ALL soldiers inward (physics only)
 	Blackout = 6,  // v0.7 #67: enemy HP hidden for 1 turn (UI fog)
 	Ants = 7,      // v0.9 #138: ants swarm one seat — soldiers jitter, no damage
+	Titan = 8,     // v1.2 #69: rare map boss — 2-turn telegraph, then a table-wide stomp (no HP)
 };
 
 enum class SeatControl : uint8_t {
@@ -435,6 +437,7 @@ inline const char* eventKindName(EventKind e)
 	case EventKind::Dog: return "Dog";
 	case EventKind::Blackout: return "Blackout";
 	case EventKind::Ants: return "Ants";
+	case EventKind::Titan: return "Toy Titan";
 	}
 	return "?";
 }

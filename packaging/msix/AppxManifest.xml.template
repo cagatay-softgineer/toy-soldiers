@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  v1.2 #167: Desktop Bridge manifest — packages the existing Win32 exe as-is
+  (runFullTrust), not a rewritten UWP app. __VERSION__ is substituted by
+  scripts/package-msix.ps1 from src/app/version.h at pack time so this file
+  never drifts from the real shipped version.
+-->
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap rescap">
+
+  <Identity
+    Name="preunec.ToySoldiersTabletop"
+    Publisher="CN=preunec-dev"
+    Version="__VERSION__.0"
+    ProcessorArchitecture="x64" />
+
+  <Properties>
+    <DisplayName>Toy Soldiers Tabletop</DisplayName>
+    <PublisherDisplayName>preunec</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.22621.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="en-us" />
+  </Resources>
+
+  <Applications>
+    <Application Id="ToySoldiers" Executable="toy_soldiers.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+        DisplayName="Toy Soldiers Tabletop"
+        Description="Card-driven toy soldier skirmishes on the living-room table. Physics included."
+        BackgroundColor="#0B0F2A"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png">
+        <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png" />
+        <uap:SplashScreen Image="Assets\SplashScreen.png" />
+      </uap:VisualElements>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <!-- Desktop Bridge full-trust apps keep the Win32 process model (direct
+         TCP/UDP sockets for LAN play, %APPDATA% settings) with no extra
+         network capability declarations — runFullTrust is the only one needed. -->
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+</Package>

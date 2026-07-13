@@ -59,11 +59,12 @@ Childhood green plastic soldiers on a living-room table, reborn as a **4-player 
 |---|---|---|---|---|
 | **Sandstorm** | Desert-weighted, after turn 4, ~28% when cooldown 0 | Adjacent-only attacks for 1 turn | Wait / use Defense-Tactic | Short duration |
 | **Rain** | Backyard-weighted | Attack damage −1 for 2 turns | Still chip with multi-hit | Min damage floor |
-| **Flood** | Desert/Backyard rare | Focus seat leaks 1 HP on their turn start (2 turns) | **Shield blocks** | Focused, not global wipe |
+| **Flood** | Desert/Backyard rare | Focus seat leaks 1 HP on their turn start (2 turns); **v1.2 #73:** also blocks line of sight — the flooded seat can only be targeted from an adjacent seat while the water stands | **Shield blocks** the leak; move adjacent to still reach them | Focused, not global wipe |
 | **Cat** | Living Room-weighted | Warn → pounce physics knock (0 HP) | N/A (flavor) | No tower damage |
+| **Titan** (v1.2 #69) | Rare, telegraphed 2 full turns ("distant stomping… something HUGE") | Table-wide physics stomp on every seat at once (no tower damage — flavor + knockback only) | None needed — no HP is ever at stake | Pure spectacle, can't swing a match |
 
 - Cooldown: 3 turns after an event starts; 2-turn grace at match start
-- Host authority; state is in snapshot protocol (now **v3** with cosmetics)
+- Host authority; state is in snapshot protocol (now **v7** — see docs/PROTOCOL.md)
 
 ### Cosmetics & room atmosphere (M4 — implemented)
 

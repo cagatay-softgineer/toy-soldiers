@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>How to Play — Oyuncak Asker Masa Savaşı (Toy Soldiers Tabletop)</title>
+<style>
+  :root {
+    --bg: #0f1220;
+    --panel: rgba(255,255,255,.075);
+    --line: rgba(255,255,255,.16);
+    --text: #f7f7fb;
+    --muted: #aeb4cf;
+    --gold: #f5c45d;
+    --blue: #7db6ff;
+    --green: #6ee7a8;
+    --red: #ff7b8f;
+    --purple: #c09bff;
+    --shadow: 0 20px 55px rgba(0,0,0,.35);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    color: var(--text);
+    background:
+      radial-gradient(circle at top left, rgba(125,182,255,.20), transparent 32rem),
+      radial-gradient(circle at 80% 5%, rgba(245,196,93,.16), transparent 28rem),
+      linear-gradient(135deg, #090b14 0%, #14182a 54%, #0b1020 100%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 28px 16px 48px;
+  }
+  h1 {
+    font-size: clamp(20px, 3vw, 30px);
+    margin: 4px 0 2px;
+    text-align: center;
+  }
+  .subtitle { color: var(--muted); margin: 0 0 20px; text-align: center; font-size: 14px; }
+  .stage {
+    position: relative;
+    width: min(920px, 100%);
+  }
+  .panels { position: relative; height: min(560px, 78vw); }
+  .panel {
+    position: absolute; inset: 0;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 24px;
+    box-shadow: var(--shadow);
+    padding: 22px;
+    display: flex;
+    flex-direction: column;
+    opacity: 0;
+    transform: translateX(24px) scale(.98);
+    pointer-events: none;
+    transition: opacity .28s ease, transform .28s ease;
+  }
+  .panel.active { opacity: 1; transform: translateX(0) scale(1); pointer-events: auto; }
+  .panel svg { flex: 1; width: 100%; height: 100%; min-height: 0; }
+  .caption { text-align: center; font-size: clamp(15px, 2.2vw, 19px); margin-top: 12px; }
+  .caption b { color: var(--gold); }
+  .nav {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; margin-top: 18px; width: min(920px, 100%);
+  }
+  button.navbtn {
+    background: rgba(255,255,255,.08);
+    border: 1px solid var(--line);
+    color: var(--text);
+    border-radius: 12px;
+    padding: 10px 18px;
+    font-size: 15px;
+    cursor: pointer;
+  }
+  button.navbtn:hover { background: rgba(255,255,255,.16); }
+  button.navbtn:disabled { opacity: .35; cursor: default; }
+  .dots { display: flex; gap: 8px; }
+  .dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: rgba(255,255,255,.25);
+    border: none; cursor: pointer; padding: 0;
+  }
+  .dot.active { background: var(--gold); }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 10px; text-align: center; }
+</style>
+</head>
+<body>
+  <h1>How Toy Soldiers Tabletop Works</h1>
+  <p class="subtitle">Six panels. No reading required to start playing. (#172 — static art, click/arrow-key to advance)</p>
+
+  <div class="stage">
+    <div class="panels" id="panels"></div>
+  </div>
+
+  <div class="nav">
+    <button class="navbtn" id="prevBtn">&larr; Prev</button>
+    <div class="dots" id="dots"></div>
+    <button class="navbtn" id="nextBtn">Next &rarr;</button>
+  </div>
+  <p class="hint">Arrow keys also work. Panel <span id="panelNum">1</span> / <span id="panelTotal">6</span></p>
+
+<script>
+const NS = "http://www.w3.org/2000/svg";
+function svgPanel(inner, viewBox) {
+  return `<svg viewBox="${viewBox}" xmlns="${NS}">${inner}</svg>`;
+}
+
+// Reusable bits: a blocky toy-soldier (body+head), a tower cuboid, a card.
+function soldier(x, y, s, color) {
+  return `<rect x="${x - s*0.55}" y="${y - s*0.2}" width="${s*1.1}" height="${s*1.6}" rx="${s*0.12}" fill="${color}"/>
+          <rect x="${x - s*0.4}" y="${y - s*1.3}" width="${s*0.8}" height="${s*0.8}" rx="${s*0.12}" fill="${color}"/>`;
+}
+function tower(x, y, w, h, color, hp) {
+  const dim = hp <= 0 ? 0.28 : 1.0;
+  return `<rect x="${x - w/2}" y="${y - h}" width="${w}" height="${h}" rx="6" fill="${color}" opacity="${dim}"/>`;
+}
+function card(x, y, w, h, color, label) {
+  const lines = label.split("|");
+  const cx = x + w / 2;
+  const cy = y + h / 2 - (lines.length - 1) * 8;
+  const tspans = lines.map((line, i) => `<tspan x="${cx}" dy="${i === 0 ? 0 : 16}">${line}</tspan>`).join("");
+  return `<g>
+    <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="10" fill="#1b2036" stroke="${color}" stroke-width="3"/>
+    <text x="${cx}" y="${cy}" text-anchor="middle" font-size="12" fill="${color}" font-family="Inter, sans-serif">${tspans}</text>
+  </g>`;
+}
+
+const GOLD = "#f5c45d", BLUE = "#7db6ff", GREEN = "#6ee7a8", RED = "#ff7b8f", PURPLE = "#c09bff", FELT = "#1f3d2c", MUTED = "#aeb4cf";
+
+const panels = [
+  {
+    caption: "Up to <b>4 players</b> pick a table theme and a tower type, then take a seat.",
+    art: svgPanel(`
+      <rect x="0" y="0" width="600" height="360" fill="none"/>
+      <ellipse cx="300" cy="200" rx="230" ry="130" fill="${FELT}" stroke="#5a3a22" stroke-width="10"/>
+      ${tower(300, 130, 26, 46, GOLD, 1)}
+      ${tower(150, 210, 26, 46, BLUE, 1)}
+      ${tower(300, 300, 26, 46, GREEN, 1)}
+      ${tower(450, 210, 26, 46, RED, 1)}
+      <text x="300" y="40" text-anchor="middle" font-size="20" fill="${MUTED}" font-family="Inter, sans-serif">Living Room · Desert · Backyard</text>
+    `, "0 0 600 360"),
+  },
+  {
+    caption: "On your turn you get a hand of cards. Pick <b>one</b>, pick a target, play it.",
+    art: svgPanel(`
+      ${card(60, 120, 100, 140, BLUE, "Plastic|Volley")}
+      ${card(180, 100, 100, 140, GREEN, "Shield|Wall")}
+      ${card(300, 90, 110, 150, GOLD, "Line|Cutter")}
+      <rect x="290" y="80" width="130" height="170" rx="12" fill="none" stroke="${GOLD}" stroke-width="4" stroke-dasharray="6 4"/>
+      ${card(440, 100, 100, 140, PURPLE, "Draw|Orders")}
+      <line x1="355" y1="255" x2="480" y2="330" stroke="${GOLD}" stroke-width="4" marker-end="url(#arrow)"/>
+      <defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="${GOLD}"/></marker></defs>
+      ${tower(500, 330, 26, 46, RED, 1)}
+      <text x="300" y="335" text-anchor="middle" font-size="18" fill="${MUTED}" font-family="Inter, sans-serif">choose target tower</text>
+    `, "0 0 600 360"),
+  },
+  {
+    caption: "Cards resolve with <b>real Box3D physics</b> — a hit actually knocks the soldiers flying.",
+    art: svgPanel(`
+      ${tower(180, 260, 30, 60, BLUE, 1)}
+      ${soldier(230, 260, 22, BLUE)}
+      <text x="180" y="60" text-anchor="middle" font-size="60" fill="${GOLD}">&#9889;</text>
+      <line x1="380" y1="70" x2="230" y2="230" stroke="${GOLD}" stroke-width="6" marker-end="url(#arrow2)"/>
+      <defs><marker id="arrow2" markerWidth="10" markerHeight="10" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="${GOLD}"/></marker></defs>
+      <g transform="rotate(35 420 150)">${soldier(420, 150, 18, RED)}</g>
+      <g transform="rotate(-20 470 220)">${soldier(470, 220, 16, RED)}</g>
+      <g transform="rotate(60 500 90)">${soldier(500, 90, 14, RED)}</g>
+      ${tower(470, 280, 30, 60, RED, 1)}
+      <text x="470" y="330" text-anchor="middle" font-size="16" fill="${RED}" font-family="Inter, sans-serif">-6 HP</text>
+    `, "0 0 600 360"),
+  },
+  {
+    caption: "The <b>room fights back</b>: sandstorms, rain, floods, even the cat can change a turn.",
+    art: svgPanel(`
+      <ellipse cx="300" cy="200" rx="230" ry="130" fill="${FELT}" stroke="#5a3a22" stroke-width="10"/>
+      <circle cx="150" cy="150" r="50" fill="${GOLD}" opacity=".5"/>
+      <circle cx="200" cy="170" r="40" fill="${GOLD}" opacity=".4"/>
+      <text x="175" y="165" text-anchor="middle" font-size="28" font-family="Inter, sans-serif" fill="#3a2a10">SAND</text>
+      <text x="420" y="120" text-anchor="middle" font-size="46">&#128009;</text>
+      <rect x="180" y="270" width="260" height="34" rx="17" fill="${RED}" opacity=".85"/>
+      <text x="310" y="294" text-anchor="middle" font-size="16" fill="#2a0b12" font-family="Inter, sans-serif">Adjacent-only attacks this turn!</text>
+    `, "0 0 600 360"),
+  },
+  {
+    caption: "When a tower hits <b>0 HP</b> it's out. Last tower standing wins the match.",
+    art: svgPanel(`
+      ${tower(120, 300, 26, 46, BLUE, 0)}
+      ${tower(240, 300, 26, 46, GREEN, 0)}
+      ${tower(360, 300, 26, 46, PURPLE, 0)}
+      ${tower(480, 260, 34, 90, GOLD, 1)}
+      <text x="480" y="150" text-anchor="middle" font-size="40">&#127942;</text>
+      <text x="300" y="60" text-anchor="middle" font-size="22" fill="${GOLD}" font-family="Inter, sans-serif">VICTORY</text>
+      ${Array.from({length: 14}).map((_, i) => `<circle cx="${80 + (i * 37) % 480}" cy="${40 + (i * 53) % 260}" r="4" fill="${[GOLD,BLUE,GREEN,RED,PURPLE][i % 5]}"/>`).join("")}
+    `, "0 0 600 360"),
+  },
+  {
+    caption: "Plastic color, tower skin, and accessories are <b>fashion only</b> — zero combat power.",
+    art: svgPanel(`
+      ${soldier(120, 260, 30, GOLD)}
+      ${soldier(240, 260, 30, RED)}
+      ${soldier(360, 260, 30, GREEN)}
+      ${soldier(480, 260, 30, PURPLE)}
+      <rect x="70" y="50" width="460" height="50" rx="25" fill="rgba(110,231,168,.15)" stroke="${GREEN}" stroke-width="3"/>
+      <text x="300" y="82" text-anchor="middle" font-size="18" fill="${GREEN}" font-family="Inter, sans-serif">No stat changes. Ever. Just style.</text>
+    `, "0 0 600 360"),
+  },
+];
+
+const panelsEl = document.getElementById("panels");
+const dotsEl = document.getElementById("dots");
+panels.forEach((p, i) => {
+  const div = document.createElement("div");
+  div.className = "panel" + (i === 0 ? " active" : "");
+  div.innerHTML = p.art + `<div class="caption">${p.caption}</div>`;
+  panelsEl.appendChild(div);
+
+  const dot = document.createElement("button");
+  dot.className = "dot" + (i === 0 ? " active" : "");
+  dot.setAttribute("aria-label", "Go to panel " + (i + 1));
+  dot.onclick = () => go(i);
+  dotsEl.appendChild(dot);
+});
+
+let idx = 0;
+const panelEls = () => document.querySelectorAll(".panel");
+const dotEls = () => document.querySelectorAll(".dot");
+const prevBtn = document.getElementById("prevBtn");
+const nextBtn = document.getElementById("nextBtn");
+const panelNum = document.getElementById("panelNum");
+document.getElementById("panelTotal").textContent = panels.length;
+
+function go(i) {
+  idx = Math.max(0, Math.min(panels.length - 1, i));
+  panelEls().forEach((el, j) => el.classList.toggle("active", j === idx));
+  dotEls().forEach((el, j) => el.classList.toggle("active", j === idx));
+  prevBtn.disabled = idx === 0;
+  nextBtn.disabled = idx === panels.length - 1;
+  panelNum.textContent = idx + 1;
+}
+prevBtn.onclick = () => go(idx - 1);
+nextBtn.onclick = () => go(idx + 1);
+document.addEventListener("keydown", (e) => {
+  if (e.key === "ArrowRight") go(idx + 1);
+  if (e.key === "ArrowLeft") go(idx - 1);
+});
+go(0);
+</script>
+</body>
+</html>

@@ -125,6 +125,11 @@ bool isValidTarget(const Match& match, int actor, int target, const CardDef& car
 			return false;
 		}
 	}
+	// v1.2 #73: the flood wall blocks line of sight — a flooded seat can only be
+	// attacked from adjacent seats while the water stands.
+	if (seatIsFlooded(match, target) && !isAdjacentSeat(match, actor, target)) {
+		return false;
+	}
 	return true;
 }
 

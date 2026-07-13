@@ -60,6 +60,7 @@ struct UiState {
 	char roomCodeInput[8] = {};    // #86 join-by-code field
 	char chatInput[200] = {};      // #81 lobby chat
 	bool rematchVoteSent = false;  // #109 client-side
+	bool joinAsSpectator = false;  // v1.2 #111
 	char recentHosts[5][96] = {};  // #86/#110 mirrored from Settings ("name|ip|port")
 	bool recentHostsDirty = false; // main persists when set
 
@@ -96,6 +97,11 @@ struct UiState {
 	// v1.1
 	bool largeLogFont = false; // #112
 	int feltDyeIndex = 0;      // #141
+	// v1.2
+	bool useCustomHex = false;    // #147
+	char customHex[8] = "#22C864";
+	bool detailedSoldiers = true; // #123
+	bool saveReplays = true;      // #107
 	int timelineIndex = -1; // scrubber into match.log (-1 = live/end)
 	bool showTimeline = true;
 	bool coachTipDismissed = false; // per-session; re-offer next match until 3 done
@@ -118,6 +124,7 @@ struct UiState {
 	bool wantFullscreenToggle = false; // consumed by main
 	bool wantApplyDisplay = false;
 	bool wantOpenProjectUrl = false; // v1.0 #166: open releases page (consumed by main)
+	bool wantExportResultCard = false; // v1.2 #188: PNG export of the results screen
 	bool matchCounted = false; // results: count matchesCompleted once per game over
 };
 

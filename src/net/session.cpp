@@ -227,15 +227,16 @@ bool NetSession::hostLobby(Match& match, const MatchConfig& cfg, const char* hos
 	return true;
 }
 
-bool NetSession::joinLobby(Match& match, const char* host, uint16_t port, const char* playerName)
+bool NetSession::joinLobby(Match& match, const char* host, uint16_t port, const char* playerName, bool spectate)
 {
 	// Note: clientToken_ survives shutdown so a quick rejoin can reclaim a seat (#99/#100).
 	const uint32_t keepToken = clientToken_;
 	shutdown(&match);
 	clearConnectionLost();
 	clientToken_ = keepToken;
+	spectateRequested_ = spectate; // v1.2 #111
 	localName_ = (playerName && playerName[0]) ? playerName : "Client";
-	if (!clientSock_.connect(host ? host : "127.0.0.1", port)) {
+	if (!net::transportConnect(transportConfig_, host ? host : "127.0.0.1", port, clientSock_)) {
 		setStatus("Join failed: connect error");
 		mode_ = AppMode::Offline;
 		return false;
@@ -245,7 +246,7 @@ bool NetSession::joinLobby(Match& match, const char* host, uint16_t port, const 
 	clientWelcomed_ = false;
 	clientCodec_.reset();
 	clientSendQ_.clear();
-	clientSendQ_.enqueue(net::FrameCodec::pack(net::makeHello(localName_.c_str(), clientToken_)));
+	clientSendQ_.enqueue(net::FrameCodec::pack(net::makeHello(localName_.c_str(), spectate ? 0 : clientToken_, spectate)));
 	clientLastRecv_ = Clock::now();
 	initLobby(match, MatchConfig{});
 	match.phase = Phase::Lobby;
@@ -277,6 +278,8 @@ void NetSession::shutdown(Match* /*match*/)
 	reclaimToken_ = {};
 	rematchVoted_ = {};
 	rematchAccept_ = {};
+	lastBroadcastValid_ = false;
+	migrationWindow_ = false;
 	if (mode_ != AppMode::Offline) {
 		mode_ = AppMode::Offline;
 	}
@@ -292,41 +295,68 @@ int NetSession::allocateSeat(Match& match) const
 	return -1;
 }
 
+namespace {
+
+// v1.2 #95: compress snapshot-class messages once they beat the 2 KB threshold.
+std::vector<uint8_t> packState(net::MsgType innerType, const std::vector<uint8_t>& payload)
+{
+	if (payload.size() > 2048) {
+		auto compressed = net::makeCompressedState(static_cast<uint8_t>(innerType), payload.data(), payload.size());
+		if (!compressed.empty()) {
+			return net::FrameCodec::pack(compressed);
+		}
+	}
+	std::vector<uint8_t> msg;
+	switch (innerType) {
+	case net::MsgType::LobbyState:
+		msg = net::makeLobbyState(payload);
+		break;
+	case net::MsgType::DeltaState:
+		msg = net::makeDeltaState(payload);
+		break;
+	default:
+		msg = net::makeMatchState(payload);
+		break;
+	}
+	return net::FrameCodec::pack(msg);
+}
+
+} // namespace
+
 void NetSession::sendSnapshotTo(ClientSlot& c, const Match& match)
 {
 	if (!c.alive) {
 		return;
 	}
+	// Individual sends (join, reclaim, resync) are always full snapshots.
 	const auto snap = serializeMatch(match);
-	const auto msg = (match.phase == Phase::Lobby) ? net::makeLobbyState(snap) : net::makeMatchState(snap);
-	c.sendQ.enqueue(net::FrameCodec::pack(msg));
+	const auto innerType = (match.phase == Phase::Lobby) ? net::MsgType::LobbyState : net::MsgType::MatchState;
+	c.sendQ.enqueue(packState(innerType, snap));
 }
 
 void NetSession::broadcastSnapshot(const Match& match)
 {
+	// v1.2 #96: mid-match broadcasts go out as player-level deltas against the last
+	// broadcast state; anything else (lobby, new match, first send) goes full.
+	std::vector<uint8_t> frame;
+	if (match.phase == Phase::Playing && lastBroadcastValid_ && lastBroadcast_.matchId == match.matchId &&
+		lastBroadcast_.syncGeneration != match.syncGeneration) {
+		frame = packState(net::MsgType::DeltaState, serializeMatchDelta(match, lastBroadcast_));
+	} else {
+		const auto innerType = (match.phase == Phase::Lobby) ? net::MsgType::LobbyState : net::MsgType::MatchState;
+		frame = packState(innerType, serializeMatch(match));
+	}
 	for (auto& c : clients_) {
 		if (c.alive) {
-			sendSnapshotTo(c, match);
+			c.sendQ.enqueue(frame);
 		}
 	}
+	lastBroadcast_ = match;
+	lastBroadcastValid_ = true;
 }
 
-void NetSession::applyRemoteSnapshot(Match& match, const uint8_t* data, size_t size, bool /*isLobby*/)
+void NetSession::adoptRemoteState(Match& match, Match&& next)
 {
-	Match next;
-	if (!deserializeMatch(next, data, size)) {
-		// #92: broken/mismatched snapshot — ask the host for a fresh one.
-		setStatus("Bad snapshot from host — requesting resync");
-		clientSendQ_.enqueue(net::FrameCodec::pack(net::makeResyncRequest()));
-		return;
-	}
-
-	// #91: ignore stale snapshots (older generation of the same match).
-	if (next.matchId == lastSeenMatchId_ && next.syncGeneration < lastSeenSync_) {
-		++staleSnapshotsIgnored_;
-		return;
-	}
-
 	// Remap seat control labels for this client view.
 	for (int i = 0; i < kMaxPlayers; ++i) {
 		Player& p = next.players[static_cast<size_t>(i)];
@@ -363,6 +393,52 @@ void NetSession::applyRemoteSnapshot(Match& match, const uint8_t* data, size_t s
 	match = std::move(next);
 	lastSeenMatchId_ = match.matchId;
 	lastSeenSync_ = match.syncGeneration;
+}
+
+void NetSession::applyRemoteSnapshot(Match& match, const uint8_t* data, size_t size, bool /*isLobby*/)
+{
+	Match next;
+	if (!deserializeMatch(next, data, size)) {
+		// #92: broken/mismatched snapshot — ask the host for a fresh one.
+		setStatus("Bad snapshot from host — requesting resync");
+		clientSendQ_.enqueue(net::FrameCodec::pack(net::makeResyncRequest()));
+		return;
+	}
+
+	// #91: ignore stale snapshots (older generation of the same match).
+	if (next.matchId == lastSeenMatchId_ && next.syncGeneration < lastSeenSync_) {
+		++staleSnapshotsIgnored_;
+		return;
+	}
+
+	adoptRemoteState(match, std::move(next));
+}
+
+// v1.2 #96: apply a delta against our current view; any mismatch falls back to #92.
+void NetSession::applyRemoteDelta(Match& match, const uint8_t* data, size_t size)
+{
+	// Deltas are diffed against the raw host state, so rebuild our "host view" first:
+	// our HumanLocal seat is HumanRemote from the host's perspective.
+	Match hostView = match;
+	if (localSeat_ >= 0 && localSeat_ < kMaxPlayers) {
+		if (hostView.players[static_cast<size_t>(localSeat_)].control == SeatControl::HumanLocal) {
+			hostView.players[static_cast<size_t>(localSeat_)].control = SeatControl::HumanRemote;
+		}
+	}
+	// The host's own seat came to us remapped HumanLocal->HumanRemote; deltas only touch
+	// dirty players, so an unchanged host seat keeps our (remapped) value — the adopt
+	// pass below re-remaps everything consistently either way.
+	const DeltaResult res = applyMatchDelta(hostView, data, size);
+	if (res == DeltaResult::Ok) {
+		adoptRemoteState(match, std::move(hostView));
+		return;
+	}
+	if (res == DeltaResult::NeedResync) {
+		setStatus("Delta out of order — requesting resync");
+	} else {
+		setStatus("Bad delta from host — requesting resync");
+	}
+	clientSendQ_.enqueue(net::FrameCodec::pack(net::makeResyncRequest()));
 }
 
 void NetSession::setError(const char* msg)
@@ -422,6 +498,9 @@ bool NetSession::requestPlayCard(Match& match, int handIndex, int targetPlayer)
 		setError("Illegal play.");
 		return false;
 	}
+	if (replayRecorder_) {
+		replayRecorder_->recordPlay(handIndex, targetPlayer); // #107
+	}
 	bumpSync(match);
 	if (mode_ == AppMode::Host) {
 		broadcastSnapshot(match);
@@ -443,6 +522,9 @@ bool NetSession::requestEndTurn(Match& match)
 	}
 	if (match.phase != Phase::Playing) {
 		return false;
+	}
+	if (replayRecorder_) {
+		replayRecorder_->recordEndTurn(); // #107
 	}
 	endTurn(match);
 	bumpSync(match);
@@ -677,6 +759,116 @@ bool NetSession::hostSetLobbyLocked(Match& match, bool locked)
 	return true;
 }
 
+bool NetSession::hostSetBannerColor(Match& match, uint8_t color)
+{
+	if (mode_ != AppMode::Host) {
+		return false;
+	}
+	match.bannerColor = static_cast<uint8_t>(color % 8); // v1.2 #84
+	bumpSync(match);
+	broadcastSnapshot(match);
+	return true;
+}
+
+NetSession::MigrationPlan NetSession::planMigration(const Match& lastState, uint16_t knownHostPort) const
+{
+	// v1.2 #101/#102. Convention: the original host is seat 0 (hostLobby claims it).
+	// Election: lowest surviving human seat (excluding 0) becomes the new authority;
+	// everyone else joins that seat's peer IP on the same port. Note: after a first
+	// migration the authority may not sit at seat 0 — chained migrations re-elect
+	// among whoever is still marked human, which is good enough for a LAN party.
+	MigrationPlan plan;
+	if (mode_ != AppMode::Client || localSeat_ < 0) {
+		return plan;
+	}
+	int lowest = -1;
+	for (int i = 1; i < lastState.config.playerCount; ++i) {
+		const SeatControl ctrl = lastState.players[static_cast<size_t>(i)].control;
+		if (ctrl == SeatControl::HumanLocal || ctrl == SeatControl::HumanRemote) {
+			lowest = i;
+			break;
+		}
+	}
+	if (lowest < 0) {
+		return plan;
+	}
+	plan.newHostSeat = lowest;
+	plan.port = knownHostPort;
+	if (lowest == localSeat_) {
+		plan.role = MigrationPlan::Role::BecomeHost;
+		return plan;
+	}
+	if (lastState.peerIp[lowest][0] == '\0') {
+		return plan; // no address for the elected host — bail to menu
+	}
+	plan.role = MigrationPlan::Role::JoinNewHost;
+	std::snprintf(plan.ip, sizeof(plan.ip), "%s", lastState.peerIp[lowest]);
+	return plan;
+}
+
+bool NetSession::hostAdoptMatch(Match& match, uint16_t port, const char* myName)
+{
+	// v1.2 #102: become the authority over the state we already hold. Full snapshot
+	// handoff is free — every client always has the complete match.
+	const int mySeat = localSeat_;
+	if (mySeat < 0 || mySeat >= match.config.playerCount) {
+		return false;
+	}
+	const uint32_t keepToken = clientToken_;
+	shutdown(nullptr); // drops the dead client socket; keeps `match` untouched
+	clientToken_ = keepToken;
+	clearConnectionLost();
+	if (!listener_.listen(port)) {
+		setStatus("Migration failed: port bind error");
+		mode_ = AppMode::Offline;
+		return false;
+	}
+	mode_ = AppMode::Host;
+	listenPort_ = port;
+	localSeat_ = mySeat;
+	localName_ = (myName && myName[0]) ? myName : match.players[static_cast<size_t>(mySeat)].name;
+
+	// The vanished host (seat 0 by convention) fights on as an AI.
+	Player& old = match.players[0];
+	if (old.control == SeatControl::HumanRemote || old.control == SeatControl::HumanLocal) {
+		old.control = SeatControl::AI;
+		char nbuf[kPlayerNameLen];
+		std::snprintf(nbuf, sizeof(nbuf), "AI-%s", old.name);
+		old.setName(nbuf);
+	}
+	match.players[static_cast<size_t>(mySeat)].control = SeatControl::HumanLocal;
+	std::memset(match.peerIp, 0, sizeof(match.peerIp));
+
+	// New room code + beacon; survivors reattach by name for 30s.
+	uint32_t codeRng = nowMs() ^ (static_cast<uint32_t>(port) << 16) ^ 0x4D16A7E5u;
+	for (int i = 0; i < kRoomCodeLen - 1; ++i) {
+		roomCode_[i] = static_cast<char>('A' + randRange(codeRng, 0, 25));
+	}
+	roomCode_[kRoomCodeLen - 1] = '\0';
+	beaconSock_.openSender();
+	lastBeacon_ = Clock::now() - std::chrono::seconds(5);
+	lastHeartbeat_ = Clock::now();
+	migrationWindow_ = true;
+	migrationDeadline_ = Clock::now() + std::chrono::seconds(30);
+	lastBroadcastValid_ = false;
+
+	MatchEvent e;
+	e.type = MatchEvent::Type::Info;
+	char buf[128];
+	std::snprintf(buf, sizeof(buf), "Host lost — %s takes over the table! (migration)",
+				  match.players[static_cast<size_t>(mySeat)].name);
+	e.text = buf;
+	match.log.push_back(std::move(e));
+	bumpSync(match);
+	lastSeenMatchId_ = match.matchId;
+	sceneNeedsRebuild_ = true;
+	char sbuf[128];
+	std::snprintf(sbuf, sizeof(sbuf), "Migrated: hosting on port %u — room code %s", static_cast<unsigned>(port),
+				  roomCode_);
+	setStatus(sbuf);
+	return true;
+}
+
 int NetSession::seatPingMs(int seat) const
 {
 	for (const auto& c : clients_) {
@@ -798,8 +990,9 @@ void NetSession::hostDropClient(Match& match, ClientSlot& c, const char* why)
 	c.seat = -1;
 	c.pingMs = -1;
 	if (seat < 0) {
-		return;
+		return; // never seated, or a spectator (#111) — nothing to free
 	}
+	std::memset(match.peerIp[seat], 0, sizeof(match.peerIp[seat]));
 	if (match.phase == Phase::Lobby) {
 		// Lobby: free the seat entirely (existing M2 behavior, tested by #113).
 		match.players[static_cast<size_t>(seat)] = Player{};
@@ -859,13 +1052,59 @@ void NetSession::hostOnClientMessage(Match& match, ClientSlot& c, const std::vec
 		char name[kPlayerNameLen] = {};
 		uint16_t ver = 0;
 		uint32_t token = 0;
-		if (!net::readHello(payload, payloadSize, name, ver, token)) {
+		bool spectate = false;
+		if (!net::readHello(payload, payloadSize, name, ver, token, spectate)) {
 			c.sendQ.enqueue(net::FrameCodec::pack(net::makeReject("bad hello")));
 			return;
 		}
-		if (c.seat >= 0) {
+		if (c.seat >= 0 || c.seat == kSpectatorSeat) {
 			c.sendQ.enqueue(net::FrameCodec::pack(net::makeWelcome(c.seat, c.token)));
 			return;
+		}
+		// v1.2 #111: spectators never take a seat — snapshots only.
+		if (spectate) {
+			c.seat = kSpectatorSeat;
+			c.name = name;
+			uint32_t rng = nowMs() ^ 0xBADC0DEu;
+			c.token = xorshift32(rng);
+			c.sendQ.enqueue(net::FrameCodec::pack(net::makeWelcome(kSpectatorSeat, c.token)));
+			sendSnapshotTo(c, match);
+			char sbuf[96];
+			std::snprintf(sbuf, sizeof(sbuf), "%s is spectating", name);
+			setStatus(sbuf);
+			return;
+		}
+		// v1.2 #101/#102: during the migration window, survivors reattach to their old
+		// seats by display name (the new host never knew their reconnect tokens).
+		if (migrationWindow_ && Clock::now() < migrationDeadline_) {
+			for (int seat = 0; seat < match.config.playerCount; ++seat) {
+				Player& p = match.players[static_cast<size_t>(seat)];
+				if (p.control == SeatControl::HumanRemote && std::strncmp(p.name, name, kPlayerNameLen) == 0) {
+					bool taken = false;
+					for (const auto& other : clients_) {
+						if (&other != &c && other.alive && other.seat == seat) {
+							taken = true;
+							break;
+						}
+					}
+					if (taken) {
+						continue;
+					}
+					c.seat = seat;
+					c.name = name;
+					uint32_t rng = nowMs() ^ (static_cast<uint32_t>(seat) << 20) ^ 0x51A75EEDu;
+					c.token = xorshift32(rng);
+					std::snprintf(match.peerIp[seat], sizeof(match.peerIp[seat]), "%s", c.ip);
+					bumpSync(match);
+					c.sendQ.enqueue(net::FrameCodec::pack(net::makeWelcome(seat, c.token)));
+					sendSnapshotTo(c, match);
+					broadcastSnapshot(match);
+					char mbuf[96];
+					std::snprintf(mbuf, sizeof(mbuf), "%s reattached after migration (seat %d)", name, seat);
+					setStatus(mbuf);
+					return;
+				}
+			}
 		}
 		if (match.phase == Phase::Lobby) {
 			// #79: closed lobby rejects fresh joins.
@@ -892,6 +1131,7 @@ void NetSession::hostOnClientMessage(Match& match, ClientSlot& c, const std::vec
 			match.players[static_cast<size_t>(seat)].control = SeatControl::HumanRemote;
 			match.players[static_cast<size_t>(seat)].setName(name);
 			match.players[static_cast<size_t>(seat)].ready = false;
+			std::snprintf(match.peerIp[seat], sizeof(match.peerIp[seat]), "%s", c.ip); // #101
 			bumpSync(match);
 			c.sendQ.enqueue(net::FrameCodec::pack(net::makeWelcome(c.seat, c.token)));
 			broadcastSnapshot(match);
@@ -909,6 +1149,7 @@ void NetSession::hostOnClientMessage(Match& match, ClientSlot& c, const std::vec
 					c.seat = seat;
 					c.name = reclaimName_[static_cast<size_t>(seat)];
 					c.token = token;
+					std::snprintf(match.peerIp[seat], sizeof(match.peerIp[seat]), "%s", c.ip); // #101
 					Player& p = match.players[static_cast<size_t>(seat)];
 					p.control = SeatControl::HumanRemote;
 					p.setName(c.name.c_str());
@@ -1026,6 +1267,9 @@ void NetSession::hostOnClientMessage(Match& match, ClientSlot& c, const std::vec
 			c.sendQ.enqueue(net::FrameCodec::pack(net::makeReject("illegal play")));
 			return;
 		}
+		if (replayRecorder_) {
+			replayRecorder_->recordPlay(hand, target); // #107
+		}
 		bumpSync(match);
 		broadcastSnapshot(match);
 		break;
@@ -1034,6 +1278,9 @@ void NetSession::hostOnClientMessage(Match& match, ClientSlot& c, const std::vec
 		if (c.seat < 0 || match.phase != Phase::Playing || match.activePlayer != c.seat) {
 			c.sendQ.enqueue(net::FrameCodec::pack(net::makeReject("not your turn")));
 			return;
+		}
+		if (replayRecorder_) {
+			replayRecorder_->recordEndTurn(); // #107
 		}
 		endTurn(match);
 		bumpSync(match);
@@ -1124,6 +1371,26 @@ void NetSession::clientOnMessage(Match& match, const std::vector<uint8_t>& frame
 		}
 		break;
 	}
+	case net::MsgType::DeltaState: {
+		applyRemoteDelta(match, payload, payloadSize);
+		break;
+	}
+	case net::MsgType::CompressedState: {
+		uint8_t innerType = 0;
+		std::vector<uint8_t> raw;
+		if (net::readCompressedState(payload, payloadSize, innerType, raw)) {
+			if (innerType == static_cast<uint8_t>(net::MsgType::DeltaState)) {
+				applyRemoteDelta(match, raw.data(), raw.size());
+			} else {
+				applyRemoteSnapshot(match, raw.data(), raw.size(),
+									innerType == static_cast<uint8_t>(net::MsgType::LobbyState));
+			}
+		} else {
+			setStatus("Bad compressed state — requesting resync");
+			clientSendQ_.enqueue(net::FrameCodec::pack(net::makeResyncRequest()));
+		}
+		break;
+	}
 	case net::MsgType::LobbyState:
 	case net::MsgType::MatchState: {
 		const uint8_t* snap = nullptr;
@@ -1178,7 +1445,8 @@ void NetSession::hostAccept(Match& match)
 		return;
 	}
 	for (;;) {
-		net::TcpSocket s = listener_.accept();
+		char peerIp[64];
+		net::TcpSocket s = listener_.accept(peerIp);
 		if (!s.valid()) {
 			break;
 		}
@@ -1206,6 +1474,7 @@ void NetSession::hostAccept(Match& match)
 		slot->lastIntentId = 0;
 		slot->pingMs = -1;
 		slot->lastRecv = Clock::now();
+		std::snprintf(slot->ip, sizeof(slot->ip), "%s", peerIp);
 	}
 }
 
@@ -1345,7 +1614,7 @@ void NetSession::update(Match& match)
 		if (match.phase == Phase::Playing) {
 			// Keep auto-playing AI until a human seat or game over (cap per frame).
 			for (int i = 0; i < 4; ++i) {
-				if (!autoPlayIfAITurn(match)) {
+				if (!autoPlayIfAITurn(match, replayRecorder_)) {
 					break;
 				}
 				broadcastSnapshot(match);
@@ -1357,7 +1626,7 @@ void NetSession::update(Match& match)
 		// Optional: auto AI seats in offline if any marked AI.
 		if (match.phase == Phase::Playing) {
 			for (int i = 0; i < 4; ++i) {
-				if (!autoPlayIfAITurn(match)) {
+				if (!autoPlayIfAITurn(match, replayRecorder_)) {
 					break;
 				}
 			}

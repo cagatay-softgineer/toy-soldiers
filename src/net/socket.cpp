@@ -290,8 +290,11 @@ bool TcpListener::listen(uint16_t port, int backlog)
 	return true;
 }
 
-TcpSocket TcpListener::accept()
+TcpSocket TcpListener::accept(char* ipOut)
 {
+	if (ipOut) {
+		ipOut[0] = '\0';
+	}
 	if (!valid()) {
 		return {};
 	}
@@ -300,6 +303,9 @@ TcpSocket TcpListener::accept()
 	auto s = ::accept(fromHandle(sock_), reinterpret_cast<sockaddr*>(&addr), &len);
 	if (s == INVALID_SOCKET) {
 		return {};
+	}
+	if (ipOut) {
+		inet_ntop(AF_INET, &addr.sin_addr, ipOut, 64);
 	}
 	TcpSocket out = TcpSocket::adopt(toHandle(s));
 	out.setNonBlocking(true);

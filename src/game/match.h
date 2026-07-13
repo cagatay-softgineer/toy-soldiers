@@ -7,6 +7,8 @@
 
 namespace toy {
 
+class ReplayRecorder; // game/replay.h — forward-declared to avoid a circular include
+
 struct PhysicsImpulseRequest {
 	int targetPlayer = -1;
 	float strength = 0.0f;
@@ -19,7 +21,12 @@ struct Match {
 	int activePlayer = 0;
 	int turnNumber = 0;
 	int winner = -1;
-	uint32_t rng = 1;
+	uint32_t rng = 1; // rule-affecting only: draws, reshuffles, event rolls, crown/focus picks
+	// v1.2 #107: separate decision-only stream (AI scoring noise, persona jitter, Easy-AI
+	// pick). Never consumed by anything that changes visible game state, so a replay that
+	// re-applies recorded actions without running the AI reproduces `rng` bit-for-bit —
+	// the whole point of a deterministic replay. Host-local; not part of the wire snapshot.
+	uint32_t aiRng = 1;
 	int nextInstanceId = 1;
 	int nextSoldierId = 1;
 	uint32_t syncGeneration = 0; // bumps on every authoritative mutation
@@ -39,6 +46,12 @@ struct Match {
 
 	// v0.8 #79: host closed the lobby to new joins.
 	bool lobbyLocked = false;
+
+	// v1.2 #84: host-picked lobby banner color (palette index 0..7).
+	uint8_t bannerColor = 0;
+	// v1.2 #101/#102: per-seat peer addresses as seen by the host — lets survivors
+	// elect and find a new host when the current one vanishes. LAN-scoped by design.
+	char peerIp[kMaxPlayers][40] = {};
 };
 
 void bumpSync(Match& match);
@@ -56,9 +69,11 @@ void startMatchFromLobby(Match& match);
 void startMatch(Match& match, const MatchConfig& config);
 void resetMatch(Match& match);
 
-bool autoPlayBest(Match& match);
+// recorder (v1.2 #107, optional): logs the resolved (handIndex, target) or the
+// no-legal-play endTurn so a .toyrec can reproduce this exact match later.
+bool autoPlayBest(Match& match, ReplayRecorder* recorder = nullptr);
 
 // Host helper: if active seat is AI, auto-play once.
-bool autoPlayIfAITurn(Match& match);
+bool autoPlayIfAITurn(Match& match, ReplayRecorder* recorder = nullptr);
 
 } // namespace toy

@@ -1,9 +1,11 @@
 #include "app/audio.h"
 #include "app/version.h"
+#include "app/capture.h"
 #include "app/crash_handler.h"
 #include "app/i18n.h"
 #include "app/session_log.h"
 #include "app/settings.h"
+#include "game/replay.h"
 #include "game/cards.h"
 #include "game/cosmetics.h"
 #include "game/events.h"
@@ -20,6 +22,7 @@
 #include "sokol_log.h"
 
 #include <cstdio>
+#include <cstring>
 #include <ctime>
 
 #if defined(_WIN32)
@@ -70,6 +73,60 @@ bool g_tutorialMatch = false; // #168: current offline match is the guided tutor
 bool g_photoMode = false;     // #187: P key — freeze sim (offline) + hide UI
 bool g_missionStormSeen = false; // #170 trackers (reset per match)
 int g_missionHealedLocal = 0;
+// v1.2 #101/#102: pending migration join (wait for the elected host to open shop)
+float g_migrateJoinTimer = 0.0f;
+char g_migrateIp[40] = {};
+uint16_t g_migratePort = 0;
+// v1.2 #107: .toyrec recording for the current authoritative match (offline or host);
+// piggybacks the existing g_fxTrackedMatchId "new match" edge for its begin() trigger.
+toy::ReplayRecorder g_replayRecorder;
+
+// v1.2 #147: parse "#RRGGBB" (or "RRGGBB"); false on malformed input.
+bool parseHexColor(const char* hex, float& r, float& g, float& b)
+{
+	if (!hex) {
+		return false;
+	}
+	if (hex[0] == '#') {
+		++hex;
+	}
+	if (std::strlen(hex) < 6) {
+		return false;
+	}
+	auto nib = [](char c) -> int {
+		if (c >= '0' && c <= '9') {
+			return c - '0';
+		}
+		if (c >= 'a' && c <= 'f') {
+			return c - 'a' + 10;
+		}
+		if (c >= 'A' && c <= 'F') {
+			return c - 'A' + 10;
+		}
+		return -1;
+	};
+	int v[6];
+	for (int i = 0; i < 6; ++i) {
+		v[i] = nib(hex[i]);
+		if (v[i] < 0) {
+			return false;
+		}
+	}
+	r = static_cast<float>(v[0] * 16 + v[1]) / 255.0f;
+	g = static_cast<float>(v[2] * 16 + v[3]) / 255.0f;
+	b = static_cast<float>(v[4] * 16 + v[5]) / 255.0f;
+	return true;
+}
+
+// v1.2 #135: pan by seat table position (seat 1 = east/right, seat 3 = west/left).
+float seatPan(int seat)
+{
+	switch (seat) {
+	case 1: return 0.7f;
+	case 3: return -0.7f;
+	default: return 0.0f;
+	}
+}
 
 void rebuildScene()
 {
@@ -166,7 +223,8 @@ void startJoin()
 {
 	toy::sessionLogf("INFO", "join %s:%d", g_ui.joinHost, g_ui.joinPort);
 	g_recordedRecentHost = false;
-	if (!g_session.joinLobby(g_match, g_ui.joinHost, static_cast<uint16_t>(g_ui.joinPort), g_ui.playerName)) {
+	if (!g_session.joinLobby(g_match, g_ui.joinHost, static_cast<uint16_t>(g_ui.joinPort), g_ui.playerName,
+							 g_ui.joinAsSpectator)) {
 		toy::uiPushToast(g_ui, g_session.status(), 3.0f);
 		toy::sessionLogf("ERROR", "join failed: %s", g_session.status());
 		g_ui.screen = toy::AppScreen::Menu;
@@ -270,6 +328,126 @@ void applyFullscreenPref()
 	g_fullscreen = g_ui.fullscreen;
 }
 
+#if defined(_WIN32)
+// v1.2 #179: "--press-tour" — script the 5 storefront screenshots automatically.
+// Approximates a live LAN party with fillAI (no second physical machine involved);
+// good enough for store placeholders, replace with real captures if a human wants to.
+bool g_pressTour = false;
+int g_tourStep = 0;
+float g_tourTimer = 0.0f;
+
+void tourCapture(const char* name)
+{
+	CreateDirectoryA("docs", nullptr);
+	CreateDirectoryA("docs\\store", nullptr);
+	CreateDirectoryA("docs\\store\\screenshots", nullptr);
+	char path[256];
+	std::snprintf(path, sizeof(path), "docs\\store\\screenshots\\%s.png", name);
+	if (toy::captureWindowPng(path)) {
+		toy::sessionLogf("INFO", "press-tour captured %s", path);
+	} else {
+		toy::sessionLogf("WARN", "press-tour capture FAILED %s", path);
+	}
+}
+
+void pressTourTick(double dt)
+{
+	if (!g_pressTour) {
+		return;
+	}
+	g_tourTimer -= static_cast<float>(dt);
+	if (g_tourTimer > 0.0f) {
+		return;
+	}
+
+	switch (g_tourStep) {
+	case 0: { // let the window present a few frames before doing anything
+		g_tourTimer = 1.0f;
+		++g_tourStep;
+		break;
+	}
+	case 1: { // lobby: host + AI-filled seats, room code + banner visible
+		std::snprintf(g_ui.playerName, sizeof(g_ui.playerName), "Press");
+		g_ui.mapIndex = static_cast<int>(toy::MapId::LivingRoom);
+		g_ui.fillAI = true;
+		startHostLobby();
+		g_tourTimer = 1.6f; // let AI seats populate + ready up
+		++g_tourStep;
+		break;
+	}
+	case 2: {
+		tourCapture("1-lobby");
+		g_session.hostStartMatch(g_match);
+		g_ui.screen = toy::AppScreen::Match;
+		g_tourTimer = 2.2f; // a couple of AI turns resolve, hand/preview settle
+		++g_tourStep;
+		break;
+	}
+	case 3: {
+		tourCapture("2-match");
+		toy::forceWorldEvent(g_match, toy::EventKind::Sandstorm);
+		toy::bumpSync(g_match);
+		g_tourTimer = 1.4f; // toast + particles spin up
+		++g_tourStep;
+		break;
+	}
+	case 4: {
+		tourCapture("3-event");
+		goMenu();
+		// "North Pole Guard" set — see game/cosmetics.cpp cosmeticSet(1).
+		const toy::CosmeticSet& set = toy::cosmeticSet(1);
+		g_ui.plasticIndex = static_cast<int>(set.plastic);
+		g_ui.towerSkinIndex = static_cast<int>(set.towerSkin);
+		g_ui.accessoryIndex = static_cast<int>(set.accessory);
+		g_ui.fillAI = true;
+		startHostLobby();
+		g_tourTimer = 1.4f;
+		++g_tourStep;
+		break;
+	}
+	case 5: {
+		tourCapture("4-cosmetics");
+		goMenu();
+		toy::MatchConfig cfg;
+		cfg.mode = toy::GameMode::QuickDuel;
+		cfg.aiLevel = toy::AiLevel::Hard; // finishes fast
+		cfg.fillEmptyWithAI = true;
+		g_session.startOffline(g_match, cfg);
+		g_ui.screen = toy::AppScreen::Match;
+		rebuildScene();
+		g_tourTimer = 0.05f;
+		++g_tourStep;
+		break;
+	}
+	case 6: { // fast-forward an offline match to completion
+		int guard = 0;
+		while (g_match.phase == toy::Phase::Playing && guard < 40) {
+			if (!g_session.autoPlay(g_match)) {
+				break;
+			}
+			++guard;
+		}
+		if (g_match.phase == toy::Phase::GameOver) {
+			g_tourTimer = 1.3f; // confetti + results panel settle
+			++g_tourStep;
+		} else {
+			g_tourTimer = 0.02f; // keep grinding next frame
+		}
+		break;
+	}
+	case 7: {
+		tourCapture("5-victory");
+		toy::sessionLog("INFO", "press-tour complete — quitting");
+		sapp_request_quit();
+		++g_tourStep;
+		break;
+	}
+	default:
+		break;
+	}
+}
+#endif
+
 void init()
 {
 	sg_desc desc = {};
@@ -324,6 +502,28 @@ void frame()
 #endif
 	}
 
+	// v1.2 #188: shareable result card — captured after this frame's UI click registers,
+	// so the export happens on the very next frame (the button's hover/press pixels are
+	// gone by then, but the results panel itself is exactly what we want in the shot).
+	if (g_ui.wantExportResultCard) {
+		g_ui.wantExportResultCard = false;
+		char path[600];
+		toy::captureMakePath("result", "png", path, static_cast<int>(sizeof(path)));
+		if (toy::captureWindowPng(path)) {
+			toy::uiPushToast(g_ui, "Result card saved to screenshots folder", 2.6f);
+			toy::sessionLogf("INFO", "result card saved: %s", path);
+		} else {
+			toy::uiPushToast(g_ui, "Could not save result card", 2.6f);
+			toy::sessionLog("WARN", "result card capture failed");
+		}
+	}
+
+	// v1.2 #77: keep a rolling ~3s low-res buffer while a match is visible, so the G
+	// hotkey can always export "the last few seconds of chaos" on demand.
+	if (g_ui.screen == toy::AppScreen::Match) {
+		toy::captureRingTick(static_cast<float>(dt));
+	}
+
 	if (g_ui.wantApplyDisplay) {
 		g_ui.wantApplyDisplay = false;
 		applyFullscreenPref();
@@ -352,12 +552,48 @@ void frame()
 		g_session.update(g_match);
 	}
 
-	// v0.8 #98: connection died (timeout / kick / version mismatch) → back to menu with reason.
+	// v0.8 #98 / v1.2 #101-#102: connection died. If the HOST vanished and we know the
+	// other survivors, migrate instead of giving up; otherwise back to menu with reason.
 	if (g_session.connectionLost()) {
-		toy::uiPushToast(g_ui, g_session.connectionLostReason(), 3.5f);
+		const bool hostLost = std::strstr(g_session.connectionLostReason(), "Host lost") != nullptr;
+		toy::NetSession::MigrationPlan plan;
+		if (hostLost && !g_session.isSpectator()) {
+			plan = g_session.planMigration(g_match, static_cast<uint16_t>(g_ui.joinPort));
+		}
+		toy::uiPushToast(g_ui, g_session.connectionLostReason(), 3.0f);
 		toy::sessionLogf("WARN", "connection lost: %s", g_session.connectionLostReason());
 		g_session.clearConnectionLost();
-		goMenu();
+		if (plan.role == toy::NetSession::MigrationPlan::Role::BecomeHost) {
+			if (g_session.hostAdoptMatch(g_match, static_cast<uint16_t>(g_ui.joinPort), g_ui.playerName)) {
+				toy::uiPushToast(g_ui, "Migration: you are the new host!", 3.5f);
+				toy::sessionLog("INFO", "migration: became host");
+				g_ui.screen = (g_match.phase == toy::Phase::Playing) ? toy::AppScreen::Match : toy::AppScreen::Lobby;
+			} else {
+				goMenu();
+			}
+		} else if (plan.role == toy::NetSession::MigrationPlan::Role::JoinNewHost) {
+			std::snprintf(g_migrateIp, sizeof(g_migrateIp), "%s", plan.ip);
+			g_migratePort = plan.port;
+			g_migrateJoinTimer = 2.5f; // give the elected host a moment to bind
+			char mbuf[128];
+			std::snprintf(mbuf, sizeof(mbuf), "Migration: rejoining %s (new host) in 2s...",
+						  g_match.players[static_cast<size_t>(plan.newHostSeat)].name);
+			toy::uiPushToast(g_ui, mbuf, 3.0f);
+			toy::sessionLogf("INFO", "migration: will join %s:%u", plan.ip, static_cast<unsigned>(plan.port));
+		} else {
+			goMenu();
+		}
+	}
+
+	// v1.2: pending migration join countdown.
+	if (g_migrateJoinTimer > 0.0f) {
+		g_migrateJoinTimer -= static_cast<float>(dt);
+		if (g_migrateJoinTimer <= 0.0f && g_migrateIp[0]) {
+			std::snprintf(g_ui.joinHost, sizeof(g_ui.joinHost), "%s", g_migrateIp);
+			g_ui.joinPort = g_migratePort;
+			g_migrateIp[0] = 0;
+			startJoin();
+		}
 	}
 
 	// v0.8 #110: remember a successfully joined host once per join.
@@ -451,6 +687,32 @@ void frame()
 						  g_match.turnNumber, localWin ? "WIN" : "loss");
 			toy::historyAppend(line);
 		}
+
+		// v1.2 #107: finish + save the .toyrec for this match, if we were recording it.
+		if (g_replayRecorder.active()) {
+			int finalHp[toy::kMaxPlayers];
+			for (int i = 0; i < toy::kMaxPlayers; ++i) {
+				finalHp[i] = g_match.players[static_cast<size_t>(i)].towerHp;
+			}
+			g_replayRecorder.finish(g_match.winner, g_match.turnNumber, finalHp);
+			char when2[32];
+			const time_t now2 = time(nullptr);
+			tm tmv2{};
+#if defined(_WIN32)
+			localtime_s(&tmv2, &now2);
+#else
+			localtime_r(&now2, &tmv2);
+#endif
+			std::strftime(when2, sizeof(when2), "%Y%m%d-%H%M%S", &tmv2);
+			char path[600];
+			std::snprintf(path, sizeof(path), "%smatch-%s-%u.toyrec", toy::replayDirPath(), when2, g_match.matchId);
+			if (g_replayRecorder.save(path)) {
+				toy::sessionLogf("INFO", "replay saved: %s", path);
+			} else {
+				toy::sessionLogf("WARN", "replay save failed: %s", path);
+			}
+			g_session.setReplayRecorder(nullptr);
+		}
 	}
 
 	// v0.7 #56: turn timer (authority enforces; client display approximates).
@@ -507,6 +769,15 @@ void frame()
 			if (g_match.phase == toy::Phase::Playing && !g_ui.reducedMotion) {
 				g_flyTimer = 1.2f;
 			}
+			// v1.2 #107: begin recording this match if we are its authority.
+			const bool isAuthority =
+				g_session.mode() == toy::AppMode::Offline || g_session.mode() == toy::AppMode::Host;
+			if (isAuthority && g_ui.saveReplays && g_match.phase == toy::Phase::Playing) {
+				g_replayRecorder.begin(g_match.config);
+				g_session.setReplayRecorder(&g_replayRecorder);
+			} else {
+				g_session.setReplayRecorder(nullptr);
+			}
 		} else if (g_match.phase == toy::Phase::Playing || g_match.phase == toy::Phase::GameOver) {
 			const int mySeatFx = (g_session.mode() == toy::AppMode::Offline) ? 0 : g_session.localSeat();
 			size_t discards = 0, hands = 0;
@@ -514,7 +785,7 @@ void frame()
 				const toy::Player& p = g_match.players[static_cast<size_t>(i)];
 				if (g_fxLastHp[i] >= 0 && p.towerHp < g_fxLastHp[i]) {
 					const int dmg = g_fxLastHp[i] - p.towerHp;
-					toy::sfxPlay(dmg >= 5 ? toy::Sfx::BigDamage : toy::Sfx::Damage);
+					toy::sfxPlay(dmg >= 5 ? toy::Sfx::BigDamage : toy::Sfx::Damage, seatPan(i));
 					if (dmg >= 5 && !g_ui.reducedMotion) {
 						g_punchTimer = 0.18f; // #75
 					}
@@ -527,7 +798,7 @@ void frame()
 					toy::sfxPlay(toy::Sfx::Shield);
 				}
 				if (p.eliminated && !g_fxLastElim[i]) {
-					toy::sfxPlay(toy::Sfx::TowerDestroy);
+					toy::sfxPlay(toy::Sfx::TowerDestroy, seatPan(i));
 					if (!g_ui.reducedMotion) {
 						g_slowMoTimer = 0.35f; // #74
 					}
@@ -554,7 +825,7 @@ void frame()
 			}
 			if (g_match.world.kind != g_fxLastWorld) {
 				g_fxLastWorld = g_match.world.kind;
-				toy::sfxEventStinger(g_match.world.kind); // #132
+				toy::sfxEventStinger(g_match.world.kind, seatPan(g_match.world.focusSeat)); // #132/#135
 				if (g_match.world.kind == toy::EventKind::Sandstorm) {
 					g_missionStormSeen = true; // #170 "Storm Winner"
 				}
@@ -606,6 +877,13 @@ void frame()
 			g_scene.paradeRest(g_match);
 		}
 		g_scene.setFeltDye(g_ui.feltDyeIndex); // v1.1 #141 (local display only)
+		{
+			// v1.2 #147: local plastic hex for my seat (soldiers only, my screen only).
+			float hr = 0, hg = 0, hb = 0;
+			const int mySeat2 = (g_session.mode() == toy::AppMode::Offline) ? 0 : g_session.localSeat();
+			const bool hexOk = g_ui.useCustomHex && parseHexColor(g_ui.customHex, hr, hg, hb);
+			g_scene.setLocalPlasticOverride(hexOk, mySeat2, hr, hg, hb);
+		}
 		if (!g_photoMode) { // #187: photo mode freezes physics + particles
 			g_scene.consumeImpulse(g_match);
 			float stepDt = static_cast<float>(dt);
@@ -650,6 +928,7 @@ void frame()
 		toy::RenderFx fx;
 		fx.time = g_appTime;
 		fx.reducedMotion = g_ui.reducedMotion;
+		fx.detailedSoldiers = g_ui.detailedSoldiers; // v1.2 #123
 		fx.activeSeat = (g_match.phase == toy::Phase::Playing) ? g_match.activePlayer : -1;
 		fx.winnerSeat = (g_match.phase == toy::Phase::GameOver) ? g_match.winner : -1;
 		fx.outlineSeat = (g_ui.screen == toy::AppScreen::Match && g_match.phase == toy::Phase::Playing &&
@@ -683,6 +962,10 @@ void frame()
 	if (g_ui.settingsDirty && (g_ui.screen == toy::AppScreen::Menu || g_ui.screen == toy::AppScreen::Settings)) {
 		saveSettingsIfDirty();
 	}
+
+#if defined(_WIN32)
+	pressTourTick(dt);
+#endif
 }
 
 void event(const sapp_event* e)
@@ -759,8 +1042,7 @@ void event(const sapp_event* e)
 		} else if (e->key_code == SAPP_KEYCODE_SPACE) {
 			if (g_ui.screen == toy::AppScreen::Match && g_session.mode() == toy::AppMode::Offline &&
 				g_match.phase == toy::Phase::Playing) {
-				toy::autoPlayBest(g_match);
-				toy::bumpSync(g_match);
+				g_session.autoPlay(g_match); // #107: routed for replay recording
 			}
 		} else if (e->key_code == SAPP_KEYCODE_H) {
 			g_ui.showHowToPlay = !g_ui.showHowToPlay;
@@ -772,6 +1054,22 @@ void event(const sapp_event* e)
 					toy::uiPushToast(g_ui, "Photo mode off", 1.2f);
 				}
 				toy::sessionLogf("INFO", "photo mode %s", g_photoMode ? "on" : "off");
+			}
+		} else if (e->key_code == SAPP_KEYCODE_G) {
+			// v1.2 #77: export the rolling ~3s GIF buffer.
+			// v1.2 #184: Shift+G exports the same buffer center-cropped to 9:16
+			// (TikTok/Shorts/Reels preset) instead of the native landscape crop.
+			if (g_ui.screen == toy::AppScreen::Match) {
+				const bool vertical = (e->modifiers & SAPP_MODIFIER_SHIFT) != 0;
+				char path[600];
+				toy::captureMakePath(vertical ? "chaos-vertical" : "chaos", "gif", path, static_cast<int>(sizeof(path)));
+				const bool saved = vertical ? toy::captureRingSaveGifVertical(path) : toy::captureRingSaveGif(path);
+				if (saved) {
+					toy::uiPushToast(g_ui, vertical ? "Vertical GIF saved to screenshots folder" : "GIF saved to screenshots folder", 2.6f);
+					toy::sessionLogf("INFO", "chaos gif saved (%s): %s", vertical ? "vertical" : "landscape", path);
+				} else {
+					toy::uiPushToast(g_ui, "Not enough buffered frames yet", 1.8f);
+				}
 			}
 		} else if (e->key_code == SAPP_KEYCODE_ENTER || e->key_code == SAPP_KEYCODE_KP_ENTER) {
 			if (g_ui.screen == toy::AppScreen::Match && g_match.phase == toy::Phase::Playing) {
@@ -819,8 +1117,17 @@ void cleanup()
 
 } // namespace
 
-sapp_desc sokol_main(int /*argc*/, char* /*argv*/[])
+sapp_desc sokol_main(int argc, char* argv[])
 {
+#if defined(_WIN32)
+	// v1.2 #179: --press-tour scripts the 5 storefront screenshots, then quits.
+	for (int i = 1; i < argc; ++i) {
+		if (argv[i] && std::strcmp(argv[i], "--press-tour") == 0) {
+			g_pressTour = true;
+		}
+	}
+#endif
+
 	// Load settings early for window size / fullscreen / vsync
 	toy::Settings early{};
 	const bool hasSettings = toy::settingsLoad(early);

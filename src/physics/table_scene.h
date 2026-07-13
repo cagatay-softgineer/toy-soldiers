@@ -51,6 +51,15 @@ public:
 	void setFeltDye(int dyeIndex) { feltDye_ = dyeIndex; }
 	static int feltDyeCount();
 	static const char* feltDyeName(int dyeIndex);
+	// v1.2 #147: local plastic-hex override for one seat (display-only, never networked).
+	void setLocalPlasticOverride(bool on, int seat, float r, float g, float b)
+	{
+		hexOverrideOn_ = on;
+		hexOverrideSeat_ = seat;
+		hexR_ = r;
+		hexG_ = g;
+		hexB_ = b;
+	}
 
 	b3WorldId world() const { return worldId_; }
 	const std::vector<BodyVisual>& visuals() const { return visuals_; }
@@ -83,6 +92,9 @@ private:
 	std::array<float, kMaxPlayers> flashTimer_{};
 	uint32_t confettiMatchId_ = 0; // fired once per match (#128)
 	int feltDye_ = 0;              // v1.1 #141
+	bool hexOverrideOn_ = false;   // v1.2 #147
+	int hexOverrideSeat_ = -1;
+	float hexR_ = 0, hexG_ = 0, hexB_ = 0;
 };
 
 } // namespace toy

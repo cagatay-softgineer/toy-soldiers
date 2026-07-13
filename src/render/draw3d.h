@@ -14,6 +14,7 @@ struct RenderFx {
 	int activeSeat = -1;     // subtle lift on the acting seat's soldiers
 	int winnerSeat = -1;     // cheering bob on victory (#124)
 	bool reducedMotion = false;
+	bool detailedSoldiers = true; // v1.2 #123: articulated toy figures (render-only)
 	float shadowR = 0.10f, shadowG = 0.10f, shadowB = 0.10f; // blob shadow tint (#119)
 };
 
@@ -37,6 +38,7 @@ private:
 	};
 
 	void pushBox(const b3WorldTransform& xf, b3Vec3 halfExtents, b3Vec3 color);
+	void pushDetailedSoldier(const b3WorldTransform& xf, b3Vec3 half, b3Vec3 color);
 	void pushAxisBox(b3Vec3 center, b3Vec3 halfExtents, b3Vec3 color);
 	void flush();
 

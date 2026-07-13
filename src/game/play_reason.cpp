@@ -61,6 +61,14 @@ const char* describeIllegalPlay(const Match& match, int playerIndex, int handInd
 				return "Target is out of range (adjacent only).";
 			}
 		}
+		// v1.2 #73: flood LOS rule.
+		if (seatIsFlooded(match, targetPlayer)) {
+			const int diff = targetPlayer > playerIndex ? targetPlayer - playerIndex : playerIndex - targetPlayer;
+			const int wrap = match.config.playerCount - 1;
+			if (!(diff == 1 || diff == wrap)) {
+				return "Flood blocks the long shot — attack from an adjacent seat.";
+			}
+		}
 	}
 	// Fallback — canPlayCard is false for another reason
 	if (!canPlayCard(match, playerIndex, handIndex, targetPlayer)) {

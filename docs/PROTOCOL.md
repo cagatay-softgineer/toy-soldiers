@@ -1,4 +1,4 @@
-# Network Protocol — toy-soldiers (protocol v6)
+# Network Protocol — toy-soldiers (protocol v7)
 
 Reference for debugging with Wireshark or building tools (#116). Host-authoritative:
 clients only ever send *intents*; the host owns all game state and broadcasts snapshots.
@@ -26,7 +26,7 @@ Every message is a length-prefixed frame:
 struct MsgHeader {            // #pragma pack(1)
     uint32_t magic;           // 0x4D325954 — "TY2M" in LE byte order
     uint16_t type;            // MsgType below
-    uint16_t version;         // kProtocolVersion (6); mismatch -> readable reject
+    uint16_t version;         // kProtocolVersion (7); mismatch -> readable reject
 };
 ```
 
@@ -34,8 +34,8 @@ struct MsgHeader {            // #pragma pack(1)
 
 | # | Name | Dir | Payload |
 |---|------|-----|---------|
-| 1 | Hello | C→H | char name[24], u16 version, u32 reconnectToken (0 = fresh) |
-| 2 | Welcome | H→C | i32 seat, u32 reconnectToken |
+| 1 | Hello | C→H | char name[24], u16 version, u32 reconnectToken (0 = fresh), u8 spectate (v1.2 #111) |
+| 2 | Welcome | H→C | i32 seat (`kSpectatorSeat = -3` for spectators), u32 reconnectToken |
 | 3 | LobbyState | H→C | full match snapshot (phase == Lobby) |
 | 4 | MatchState | H→C | full match snapshot |
 | 5 | Ready | C→H | u8 ready |
@@ -51,6 +51,8 @@ struct MsgHeader {            // #pragma pack(1)
 | 17 | Kick | H→C | u16 len, char reason[len]; socket closes after |
 | 18 | ResyncRequest | C→H | — (host answers with a full snapshot) |
 | 19 | RematchVote | C→H | u8 accept |
+| 20 | CompressedState | H→C | u8 innerType, u32 rawSize, lz4 block (v1.2 #95) |
+| 21 | DeltaState | H→C | u32 baseSyncGeneration, player-level delta payload (v1.2 #96) |
 
 Timeouts: either side drops a peer after 8s of silence. A mid-match drop hands the seat
 to the AI and reserves it for the reconnect token for 60s.
@@ -59,9 +61,55 @@ to the AI and reserves it for the reconnect token for 60s.
 
 `LobbyState`/`MatchState` payloads (after the header) are the full serialized match:
 magic `0x32594F54` ("TOY2"), u16 protocol version, then config, world event, per-player
-state (including hands/decks), the last 24 log lines, and the pending physics impulse.
-Clients ignore snapshots older than the last seen (matchId, syncGeneration) pair.
-~2.3 KB typical; see `src/game/snapshot.cpp` for the exact field order.
+state (including hands/decks), the last 24 log lines, `bannerColor` (u8, 0-7, v1.2 #84),
+per-seat `peerIp[40]` (host-local, not meaningful to clients), and the pending physics
+impulse. Clients ignore snapshots older than the last seen (matchId, syncGeneration)
+pair. ~2.3 KB typical; see `src/game/snapshot.cpp` for the exact field order.
+
+## Compression and deltas (v1.2 #95/#96)
+
+`packState()` (`src/net/session.cpp`) decides per-send how to wrap a snapshot:
+
+1. **First send to a peer, or lobby/new-match snapshots** — always a full
+   `LobbyState`/`MatchState`, uncompressed. A client needs a complete baseline before
+   deltas mean anything.
+2. **Full snapshot > 2 KB** — wrapped in `CompressedState` (lz4-compressed; `innerType`
+   records whether the inner payload was `LobbyState` or `MatchState` so the client
+   re-dispatches correctly after decompressing).
+3. **Mid-match broadcast where the client already has a same-or-newer baseline** — sent
+   as `DeltaState` instead: a dirty-player bitmask (which of the 4 seats changed) plus
+   just those players' serialized fields and the log tail, referenced against
+   `baseSyncGeneration`. `applyMatchDelta()` on the client returns
+   `DeltaResult::NeedResync` if the base generation doesn't match what it has, which
+   triggers a `ResyncRequest` — deltas degrade to a full resync rather than silently
+   desyncing.
+
+Delta payloads are typically well under half the size of a full snapshot for a
+single-player-changed update (e.g. a card play or end-turn); a no-op/idle delta
+(nothing changed) is smaller still. See `toy_net_test`'s "compression + delta unit"
+case for the exact size assertions.
+
+## Spectators (v1.2 #111)
+
+`Hello` carries a `spectate` flag; the host assigns `kSpectatorSeat` (-3) instead of
+consuming one of the 4 player seats. Spectators receive the same snapshot stream as
+everyone else (full/compressed/delta, per the rules above) but the host rejects any
+`PlayCard`/`EndTurn`/`SetTower`/etc. from a spectator-seated connection — read-only by
+construction, not just by client-side UI hiding.
+
+## Host migration (v1.2 #101/#102)
+
+Lobby-only migration (v1-lite, #101): if the host disconnects while `phase == Lobby`,
+remaining clients elect a new host locally (lowest seat index still connected) and
+that client re-hosts a fresh lobby; other clients reconnect via the normal `Hello`
+path — no new wire messages needed, since nothing mid-match needs preserving yet.
+
+Mid-match migration (#102) additionally opens a `migrationWindow_` on the new host: an
+incoming `Hello` whose display name matches a seat from the snapshot the new host
+inherited is reattached to that seat (rather than treated as a fresh joiner) until the
+window's deadline passes. This reuses `Hello`/`Welcome` rather than adding new message
+types — the "is this a migration reattach or a fresh join" decision is host-side name
+matching against `MigrationPlan`, not a protocol-level flag.
 
 ## UDP beacon (discovery)
 

@@ -1,5 +1,7 @@
 #include "net/protocol.h"
 
+#include "lz4.h" // v1.2 #95 (vendored, extern/lz4)
+
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -66,13 +68,14 @@ uint16_t readU16(const uint8_t*& p, const uint8_t* end, bool& ok)
 
 } // namespace
 
-std::vector<uint8_t> makeHello(const char* name, uint32_t reconnectToken)
+std::vector<uint8_t> makeHello(const char* name, uint32_t reconnectToken, bool spectate)
 {
 	std::vector<uint8_t> out;
 	writeHeader(out, MsgType::Hello);
 	writeStr24(out, name);
 	writeU16(out, kProtocolVersion);
 	writeI32(out, static_cast<int32_t>(reconnectToken));
+	out.push_back(spectate ? 1 : 0); // v1.2 #111
 	return out;
 }
 
@@ -181,7 +184,8 @@ bool parseHeader(const uint8_t* data, size_t size, MsgHeader& out, const uint8_t
 	return true;
 }
 
-bool readHello(const uint8_t* p, size_t n, char nameOut[kPlayerNameLen], uint16_t& version, uint32_t& token)
+bool readHello(const uint8_t* p, size_t n, char nameOut[kPlayerNameLen], uint16_t& version, uint32_t& token,
+			   bool& spectate)
 {
 	if (n < kPlayerNameLen + 2) {
 		return false;
@@ -190,6 +194,7 @@ bool readHello(const uint8_t* p, size_t n, char nameOut[kPlayerNameLen], uint16_
 	nameOut[kPlayerNameLen - 1] = '\0';
 	version = static_cast<uint16_t>(p[kPlayerNameLen] | (p[kPlayerNameLen + 1] << 8));
 	token = 0;
+	spectate = false;
 	if (n >= kPlayerNameLen + 6) {
 		bool ok = true;
 		const uint8_t* cur = p + kPlayerNameLen + 2;
@@ -198,6 +203,9 @@ bool readHello(const uint8_t* p, size_t n, char nameOut[kPlayerNameLen], uint16_
 		if (!ok) {
 			token = 0;
 		}
+	}
+	if (n >= kPlayerNameLen + 7) {
+		spectate = p[kPlayerNameLen + 6] != 0; // v1.2 #111
 	}
 	return true;
 }
@@ -344,6 +352,50 @@ std::vector<uint8_t> makeRematchVote(bool accept)
 	std::vector<uint8_t> out;
 	writeHeader(out, MsgType::RematchVote);
 	out.push_back(accept ? 1 : 0);
+	return out;
+}
+
+std::vector<uint8_t> makeCompressedState(uint8_t innerType, const uint8_t* raw, size_t rawSize)
+{
+	std::vector<uint8_t> out;
+	writeHeader(out, MsgType::CompressedState);
+	out.push_back(innerType);
+	writeI32(out, static_cast<int32_t>(rawSize));
+	const int bound = LZ4_compressBound(static_cast<int>(rawSize));
+	std::vector<uint8_t> comp(static_cast<size_t>(bound));
+	const int n = LZ4_compress_default(reinterpret_cast<const char*>(raw), reinterpret_cast<char*>(comp.data()),
+									   static_cast<int>(rawSize), bound);
+	if (n <= 0) {
+		return {}; // caller falls back to the uncompressed message
+	}
+	out.insert(out.end(), comp.begin(), comp.begin() + n);
+	return out;
+}
+
+bool readCompressedState(const uint8_t* p, size_t n, uint8_t& innerType, std::vector<uint8_t>& rawOut)
+{
+	if (n < 5) {
+		return false;
+	}
+	innerType = p[0];
+	bool ok = true;
+	const uint8_t* cur = p + 1;
+	const uint8_t* end = p + n;
+	const int32_t rawSize = readI32(cur, end, ok);
+	if (!ok || rawSize <= 0 || rawSize > (1 << 20)) {
+		return false;
+	}
+	rawOut.resize(static_cast<size_t>(rawSize));
+	const int got = LZ4_decompress_safe(reinterpret_cast<const char*>(cur), reinterpret_cast<char*>(rawOut.data()),
+										static_cast<int>(end - cur), rawSize);
+	return got == rawSize;
+}
+
+std::vector<uint8_t> makeDeltaState(const std::vector<uint8_t>& deltaPayload)
+{
+	std::vector<uint8_t> out;
+	writeHeader(out, MsgType::DeltaState);
+	out.insert(out.end(), deltaPayload.begin(), deltaPayload.end());
 	return out;
 }
 

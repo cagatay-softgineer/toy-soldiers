@@ -523,6 +523,10 @@ void TableScene::syncFromMatch(const Match& match)
 			} else {
 				base = soldierColorRgb(p.cosmetics);
 			}
+			// v1.2 #147: local custom-hex plastic for my own seat (soldiers only).
+			if (hexOverrideOn_ && v.playerId == hexOverrideSeat_ && v.kind == BodyVisual::Kind::Soldier) {
+				base = { hexR_, hexG_, hexB_ };
+			}
 			if (p.eliminated) {
 				v.color = { base.x * 0.25f, base.y * 0.25f, base.z * 0.25f };
 			} else {

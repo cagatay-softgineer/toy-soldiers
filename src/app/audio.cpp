@@ -31,6 +31,7 @@ struct Voice {
 	float attack = 0.004f;
 	float release = 0.05f;
 	float gain = 0.25f;
+	float pan = 0.0f; // v1.2 #135: -1 left .. +1 right
 	uint32_t noiseState = 0x1234567u;
 };
 
@@ -94,9 +95,17 @@ float envelope(const Voice& v)
 	return -1.0f; // done
 }
 
+// v1.2 #135: pan requested for the next batch of SFX voices (set under lock by the
+// public entry points before their spawn() calls).
+float& gPendingPan()
+{
+	static float pan = 0.0f;
+	return pan;
+}
+
 // Spawn a voice (caller holds lock).
 void spawn(Wave wave, float freq, float dur, float gain, float delay = 0.0f, float slide = 0.0f, bool music = false,
-		   float release = 0.05f)
+		   float release = 0.05f, float pan = 0.0f)
 {
 	for (Voice& v : g_audio.voices) {
 		if (!v.active) {
@@ -110,6 +119,8 @@ void spawn(Wave wave, float freq, float dur, float gain, float delay = 0.0f, flo
 			v.gain = gain;
 			v.t = -delay;
 			v.release = release;
+			float pp = music ? pan : pan + gPendingPan();
+			v.pan = pp < -1.0f ? -1.0f : (pp > 1.0f ? 1.0f : pp);
 			return;
 		}
 	}
@@ -180,7 +191,8 @@ void streamCb(float* buffer, int numFrames, int numChannels)
 	for (int f = 0; f < numFrames; ++f) {
 		// #199: ~50ms exponential glide toward the duck target — no clicks on focus change.
 		g_audio.duck += (g_audio.duckTarget - g_audio.duck) * 0.0005f;
-		float s = 0.0f;
+		float sl = 0.0f;
+		float sr = 0.0f;
 		for (Voice& v : g_audio.voices) {
 			if (!v.active) {
 				continue;
@@ -201,19 +213,27 @@ void streamCb(float* buffer, int numFrames, int numChannels)
 					v.phase -= 1.0f;
 				}
 				const float vol = v.gain * env * (v.isMusic ? g_audio.musicVol : g_audio.sfxVol);
-				s += sampleWave(v) * vol;
+				const float smp = sampleWave(v) * vol;
+				// v1.2 #135: constant-ish power pan.
+				sl += smp * (0.5f * (1.0f - v.pan) + 0.5f);
+				sr += smp * (0.5f * (1.0f + v.pan) + 0.5f);
 			}
 		}
-		s *= g_audio.masterVol * g_audio.duck;
-		// Soft clip.
-		if (s > 1.0f) {
-			s = 1.0f;
-		}
-		if (s < -1.0f) {
-			s = -1.0f;
-		}
-		for (int c = 0; c < numChannels; ++c) {
-			buffer[f * numChannels + c] = s;
+		const float master = g_audio.masterVol * g_audio.duck;
+		sl *= master;
+		sr *= master;
+		if (sl > 1.0f) { sl = 1.0f; }
+		if (sl < -1.0f) { sl = -1.0f; }
+		if (sr > 1.0f) { sr = 1.0f; }
+		if (sr < -1.0f) { sr = -1.0f; }
+		if (numChannels >= 2) {
+			buffer[f * numChannels + 0] = sl;
+			buffer[f * numChannels + 1] = sr;
+			for (int c = 2; c < numChannels; ++c) {
+				buffer[f * numChannels + c] = 0.5f * (sl + sr);
+			}
+		} else {
+			buffer[f] = 0.5f * (sl + sr);
 		}
 	}
 }
@@ -227,7 +247,7 @@ bool audioInit()
 	}
 	saudio_desc desc = {};
 	desc.stream_cb = streamCb;
-	desc.num_channels = 1;
+	desc.num_channels = 2; // v1.2 #135: stereo for seat panning
 	saudio_setup(&desc);
 	g_audio.ready = saudio_isvalid();
 	return g_audio.ready;
@@ -262,12 +282,13 @@ void audioSetDucked(bool ducked)
 	g_audio.duckTarget = ducked ? 0.15f : 1.0f; // #199
 }
 
-void sfxPlay(Sfx s)
+void sfxPlay(Sfx s, float pan)
 {
 	if (!g_audio.ready) {
 		return;
 	}
 	std::lock_guard<std::mutex> guard(g_audio.lock);
+	gPendingPan() = pan;
 	switch (s) {
 	case Sfx::CardPlay:
 		spawn(Wave::Square, 520.0f, 0.05f, 0.16f, 0.0f, 1400.0f);
@@ -309,14 +330,16 @@ void sfxPlay(Sfx s)
 		}
 		break;
 	}
+	gPendingPan() = 0.0f;
 }
 
-void sfxEventStinger(EventKind kind)
+void sfxEventStinger(EventKind kind, float pan)
 {
 	if (!g_audio.ready) {
 		return;
 	}
 	std::lock_guard<std::mutex> guard(g_audio.lock);
+	gPendingPan() = pan;
 	switch (kind) {
 	case EventKind::Sandstorm:
 		spawn(Wave::Noise, 200.0f, 0.35f, 0.14f, 0.0f, 0.0f, false, 0.3f);
@@ -351,9 +374,17 @@ void sfxEventStinger(EventKind kind)
 				  0.04f * static_cast<float>(i));
 		}
 		break;
+	case EventKind::Titan:
+		// v1.2 #69: deep double boom, growing.
+		spawn(Wave::Square, 60.0f, 0.15f, 0.24f, 0.0f, -20.0f, false, 0.2f);
+		spawn(Wave::Noise, 120.0f, 0.10f, 0.14f, 0.02f);
+		spawn(Wave::Square, 55.0f, 0.18f, 0.28f, 0.35f, -18.0f, false, 0.25f);
+		spawn(Wave::Noise, 110.0f, 0.12f, 0.16f, 0.37f);
+		break;
 	default:
 		break;
 	}
+	gPendingPan() = 0.0f;
 }
 
 void musicPlay(MusicTrack t)

@@ -64,7 +64,7 @@ void clampSettings(Settings& out)
 	if (out.windowHeight < 600) {
 		out.windowHeight = 600;
 	}
-	if (out.language != 0 && out.language != 1) {
+	if (out.language < 0 || out.language > 3) { // v1.2 #157: EN/TR + DE/IT stubs
 		out.language = 0;
 	}
 	if (out.lastMode < 0 || out.lastMode > 3) {
@@ -226,6 +226,14 @@ bool settingsLoad(Settings& out)
 			out.largeLogFont = parseBool(val, false);
 		} else if (std::strcmp(key, "feltDyeIndex") == 0) {
 			out.feltDyeIndex = std::atoi(val);
+		} else if (std::strcmp(key, "useCustomHex") == 0) {
+			out.useCustomHex = parseBool(val, false);
+		} else if (std::strcmp(key, "customHex") == 0) {
+			std::snprintf(out.customHex, sizeof(out.customHex), "%s", val);
+		} else if (std::strcmp(key, "detailedSoldiers") == 0) {
+			out.detailedSoldiers = parseBool(val, true);
+		} else if (std::strcmp(key, "saveReplays") == 0) {
+			out.saveReplays = parseBool(val, true);
 		}
 	}
 	std::fclose(f);
@@ -285,6 +293,10 @@ bool settingsSave(const Settings& s)
 	}
 	std::fprintf(f, "largeLogFont=%d\n", tmp.largeLogFont ? 1 : 0);
 	std::fprintf(f, "feltDyeIndex=%d\n", tmp.feltDyeIndex);
+	std::fprintf(f, "useCustomHex=%d\n", tmp.useCustomHex ? 1 : 0);
+	std::fprintf(f, "customHex=%s\n", tmp.customHex);
+	std::fprintf(f, "detailedSoldiers=%d\n", tmp.detailedSoldiers ? 1 : 0);
+	std::fprintf(f, "saveReplays=%d\n", tmp.saveReplays ? 1 : 0);
 	std::fclose(f);
 	return true;
 }
@@ -325,6 +337,22 @@ const char* historyPath()
 		p = settingsPath(); // ensures the directory exists
 		const size_t slash = p.find_last_of("/\\");
 		p = (slash == std::string::npos) ? "toy-soldiers-history.txt" : p.substr(0, slash + 1) + "history.txt";
+	}
+	return p.c_str();
+}
+
+// v1.2 #107: <settings dir>/replays/ — created once, cross-platform.
+const char* replayDirPath()
+{
+	static std::string p;
+	if (p.empty()) {
+		std::string base = settingsPath(); // ensures the base directory exists
+		const size_t slash = base.find_last_of("/\\");
+		const char sep = (slash != std::string::npos && base[slash] == '\\') ? '\\' : '/';
+		const std::string parent = (slash == std::string::npos) ? std::string(".") : base.substr(0, slash);
+		p = parent + sep + "replays";
+		ensureDir(p);
+		p += sep;
 	}
 	return p.c_str();
 }

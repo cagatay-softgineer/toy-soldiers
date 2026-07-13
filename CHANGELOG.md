@@ -5,8 +5,90 @@ All notable changes to **Oyuncak Asker Masa Savaşı (toy-soldiers)** are docume
 ## [Unreleased]
 
 ### Planned
-- v1.1.x — see the [v1.1 milestone](https://github.com/cagatay-softgineer/toy-soldiers/milestone/7)
-  and [docs/RELEASE.md](docs/RELEASE.md)
+- See the "v1.3 teaser" section of [docs/RELEASE.md](docs/RELEASE.md) — no promises,
+  mostly gated on external prerequisites (a real relay backend, real Apple hardware,
+  a Store/Partner Center identity) rather than more code.
+
+## [1.2.0] — 2026-07-13 · "Reinforcements"
+
+Cleared the entire v1.1 post-launch backlog: 25 deferred roadmap items implemented for
+real (not stubbed), plus meaningful automated progress on the 4 remaining human-only
+launch tasks. **Balance freeze reset at this tag** — two new rule-affecting mechanics
+landed, revalidated with a fresh 200-trial report before shipping (see docs/RELEASE.md).
+
+### Added — rules & content (#69/#73/#151/#157/#147/#135/#122/#123)
+- **Titan boss event** (#69): rare, telegraphed 2 turns ahead, map-boss-scale world
+  event for wave-1 tables
+- **Flood line-of-sight** (#73): flood zones now block targeting in addition to their
+  existing focus-seat HP leak, layering with Sandstorm's adjacent-only rule
+- **Seasonal featured deck modifier** (#151): rotating weekly ban/add tweak surfaced in
+  the lobby deck-tweaks panel
+- **German/Italian locale stubs** (#157) for the Erasmus+ narrative track
+- **Custom hex color import** (#147): local-only plastic override beyond the preset swatches
+- **Spatial SFX** (#135): seat-position-aware stereo panning for hit/event audio
+- **Screen-space AO lite** (#122) and **optional detailed procedural soldiers** (#123,
+  render-only toggle, no gameplay effect)
+
+### Added — protocol v7 (#111/#95/#96/#101/#102/#84)
+- **Spectator mode** (#111): join read-only via a `spectate` Hello flag; host assigns
+  `kSpectatorSeat` instead of a player seat and rejects any action message from one
+- **Snapshot compression** (#95) and **delta snapshots** (#96): `CompressedState`/
+  `DeltaState` message types (lz4, dirty-player-bitmask deltas with automatic resync
+  fallback on a generation mismatch) — see docs/PROTOCOL.md for the full framing
+- **Host migration**: lobby-only election (#101) and mid-match snapshot handoff with a
+  name-reattach window (#102), reusing `Hello`/`Welcome` rather than new wire messages
+- **Lobby banner color** (#84): host-picked, broadcast to everyone, shown as a strip in
+  the lobby UI
+
+### Added — capture & replay (#77/#97/#107/#179/#188/#184)
+- **`.toyrec` replay export** (#107): records the action sequence (not AI decisions) for
+  dispute review; verified deterministic via a from-scratch RNG-stream separation fix
+  (`match.rng` for rule-affecting draws vs. `match.aiRng` for AI-decision-only noise) —
+  a replay re-applies recorded actions directly and reproduces the original match
+  bit-for-bit without ever running the AI
+- **Lockstep determinism test** (#97): two independent `Match` instances compared after
+  every single action across 4 seeds × 4 modes (16/16 passing)
+- **GIF burst capture** (#77, `G` hotkey) and **9:16 vertical presets** for TikTok/
+  Shorts/Reels (#184, `Shift+G`, plus a one-shot vertical PNG helper) — same rolling
+  ~3s frame ring, center-cropped
+- **Automated press-tour** (#179, `--press-tour` CLI flag): scripts a full lobby → match
+  → event → cosmetics → victory flow and captures all 5 storefront screenshots via
+  `PrintWindow(..., PW_RENDERFULLCONTENT)` (proactively used over `BitBlt`-from-`GetDC`,
+  which is unreliable against D3D11 flip-model swapchains)
+- **Shareable result-card PNG export** (#188) on the results screen
+
+### Added — packaging & store assets (#90/#89/#161/#167/#172/#182/#181/#175)
+- **QR code for the room code** (#90): rendered as a live sokol-gfx texture in the host
+  lobby (vendored `qrcodegen`)
+- **Transport seam for a future relay backend** (#89): `net::transportConnect()` is now
+  the single call site `joinLobby` uses to establish its connection; a relay backend
+  plugs in as one new branch with no other code changes. No relay service exists to
+  build against yet, so selecting it fails loudly rather than pretending to work — see
+  docs/WAN_PLAY.md for the direct-connect/port-forward path that works today
+- **macOS CI job** (#161): builds the full Metal/AppKit GUI target and runs the headless
+  gate suite on `macos-latest`. Required real fixes, not just a new workflow file: a
+  separate Objective-C `sokol_impl.m` (sokol's Metal/AppKit backend needs Objective-C,
+  which a plain `.c` file can't provide) and linking the `AudioToolbox` framework for
+  `sokol_audio.h`'s macOS backend
+- **MSIX packaging experiment** (#167): a real Desktop Bridge manifest + packing
+  pipeline (`scripts/package-msix.ps1`) — verified by actually producing an installable
+  `.msix` via `makeappx`, not just writing the manifest
+- **Interactive rules comic** (#172): `docs/rules-comic.html`, 6 static SVG panels with
+  click/arrow-key navigation
+- **Steam capsule art set** (#182): all 4 store-page sizes (main/header/small/vertical),
+  SVG source + exact-pixel PNG renders, verified pixel-dimension-exact
+- **Automated equivalents for the playtest checklist** (#175): mapped each checklist
+  item to existing automated coverage (net-test loopback stress, reclaim timing, beacon
+  matching, settings round-trip) versus what's genuinely still human-only — see
+  docs/RELEASE.md. The real 4-human LAN session itself did not happen this cycle.
+- itch.io page copy (#181) and the trailer script (#180) were already complete from the
+  v1.0 cycle — only needed closing, not new work.
+
+### Fixed
+- **Settings persistence bug**: `useCustomHex`/`customHex`/`detailedSoldiers` were
+  parsed on load but never written on save — silently reset every restart
+- Dead/unused `Gdiplus::Bitmap` construction and unused `grabClient` output params in
+  the capture path
 
 ## [1.1.0] — 2026-07-12 · "Encore"
 

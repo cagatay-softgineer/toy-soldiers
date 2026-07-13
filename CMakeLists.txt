@@ -1,9 +1,14 @@
 cmake_minimum_required(VERSION 3.22)
 project(toy_soldiers
-	VERSION 1.1.0
+	VERSION 1.2.0
 	DESCRIPTION "Oyuncak Asker Masa Savasi — Box3D game jam prototype"
 	LANGUAGES C CXX
 )
+
+# v1.2 #161: sokol_impl.m (Metal/macOS backend) needs the Objective-C frontend.
+if(APPLE)
+	enable_language(OBJC)
+endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -83,7 +88,7 @@ elseif(APPLE)
 	target_compile_definitions(sokol INTERFACE SOKOL_METAL)
 	target_link_libraries(sokol INTERFACE
 		"-framework Foundation" "-framework Cocoa" "-framework QuartzCore"
-		"-framework Metal" "-framework MetalKit")
+		"-framework Metal" "-framework MetalKit" "-framework AudioToolbox")
 else()
 	target_compile_definitions(sokol INTERFACE SOKOL_GLCORE)
 	find_package(OpenGL REQUIRED)
@@ -113,6 +118,8 @@ add_library(toy_game STATIC
 	src/game/summary.h
 	src/game/play_reason.cpp
 	src/game/play_reason.h
+	src/game/replay.cpp
+	src/game/replay.h
 	src/app/settings.cpp
 	src/app/settings.h
 	src/app/i18n.cpp
@@ -127,10 +134,16 @@ add_library(toy_game STATIC
 	src/net/socket.h
 	src/net/protocol.cpp
 	src/net/protocol.h
+	src/net/transport.cpp
+	src/net/transport.h
 	src/net/session.cpp
 	src/net/session.h
+	extern/lz4/lz4.c
+	extern/lz4/lz4.h
 )
 target_include_directories(toy_game PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+# v1.2 #95: vendored lz4 for snapshot compression.
+target_include_directories(toy_game SYSTEM PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/extern/lz4")
 target_link_libraries(toy_game PUBLIC box3d)
 if(WIN32)
 	target_link_libraries(toy_game PUBLIC ws2_32)
@@ -192,23 +205,52 @@ if(MSVC)
 	set_property(TARGET toy_golden_seed_test PROPERTY VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
 endif()
 
+add_executable(toy_replay_test src/replay_main.cpp)
+target_link_libraries(toy_replay_test PRIVATE toy_game)
+if(MSVC)
+	set_property(TARGET toy_replay_test PROPERTY VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+endif()
+
+add_executable(toy_lockstep_test src/lockstep_test_main.cpp)
+target_link_libraries(toy_lockstep_test PRIVATE toy_game)
+if(MSVC)
+	set_property(TARGET toy_lockstep_test PROPERTY VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+endif()
+
 # ---------------------------------------------------------------------------
 # Graphical prototype
 # ---------------------------------------------------------------------------
+# v1.2 #161: sokol_impl.c can't build Metal/AppKit on Apple (needs Objective-C) — see sokol_impl.m.
+if(APPLE)
+	set(TOY_SOKOL_IMPL src/sokol_impl.m)
+else()
+	set(TOY_SOKOL_IMPL src/sokol_impl.c)
+endif()
+
 add_executable(toy_soldiers
 	src/main.cpp
-	src/sokol_impl.c
+	${TOY_SOKOL_IMPL}
 	src/sokol_imgui_impl.cpp
 	src/app/audio.cpp
 	src/app/audio.h
+	src/app/capture.cpp
+	src/app/capture.h
 	src/render/camera.cpp
 	src/render/camera.h
 	src/render/draw3d.cpp
 	src/render/draw3d.h
+	src/render/qr_texture.cpp
+	src/render/qr_texture.h
 	src/render/ui.cpp
 	src/render/ui.h
+	extern/qrcodegen/qrcodegen.c
+	extern/qrcodegen/qrcodegen.h
 )
 target_include_directories(toy_soldiers PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+# v1.2 #77/#188/#179: vendored msf_gif single-header (GIF burst + press-tour capture).
+target_include_directories(toy_soldiers SYSTEM PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/extern/msf_gif")
+# v1.2 #90: vendored qrcodegen (room-code QR in the host lobby).
+target_include_directories(toy_soldiers SYSTEM PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/extern/qrcodegen")
 target_link_libraries(toy_soldiers PRIVATE toy_game sokol imgui)
 if(MSVC)
 	target_compile_options(toy_soldiers PRIVATE /W4 /wd4201)
@@ -216,6 +258,10 @@ if(MSVC)
 	set_property(TARGET toy_soldiers PROPERTY VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
 else()
 	target_compile_options(toy_soldiers PRIVATE -Wall -Wextra)
+endif()
+if(WIN32)
+	# capture.cpp PNG path (#179/#188) uses GDI+.
+	target_link_libraries(toy_soldiers PRIVATE gdiplus)
 endif()
 
 message(STATUS "Toy Soldiers → Box3D at ${TOY_BOX3D_DIR}")

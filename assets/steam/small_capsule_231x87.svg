@@ -1,0 +1,15 @@
+<svg width="231" height="87" viewBox="0 0 231 87" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="bg" cx="75%" cy="15%" r="100%">
+      <stop offset="0%" stop-color="#1c2340"/>
+      <stop offset="60%" stop-color="#12162a"/>
+      <stop offset="100%" stop-color="#0a0c18"/>
+    </radialGradient>
+  </defs>
+  <rect width="231" height="87" fill="url(#bg)"/>
+  <rect x="190" y="30" width="14" height="24" rx="3" fill="#f5c45d"/>
+  <rect x="194" y="18" width="7" height="14" rx="2" fill="#f5c45d"/>
+
+  <text x="14" y="40" font-family="Arial, Helvetica, sans-serif" font-weight="800" font-size="19" fill="#f7f7fb">TOY SOLDIERS</text>
+  <text x="14" y="62" font-family="Arial, Helvetica, sans-serif" font-weight="800" font-size="19" fill="#f5c45d">TABLETOP</text>
+</svg>

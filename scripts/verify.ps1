@@ -58,7 +58,9 @@ $tests = @(
   "toy_content_test.exe",
   "toy_balance_report.exe",
   "toy_net_test.exe",
-  "toy_golden_seed_test.exe"
+  "toy_golden_seed_test.exe",
+  "toy_lockstep_test.exe",
+  "toy_replay_test.exe"
 )
 
 $failed = 0

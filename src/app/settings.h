@@ -64,6 +64,12 @@ struct Settings {
 	// --- v1.1 ---
 	bool largeLogFont = false; // #112 Twitch-friendly battle log
 	int feltDyeIndex = 0;      // #141 local table tint (0 = map default)
+
+	// --- v1.2 ---
+	bool useCustomHex = false; // #147 local plastic override
+	char customHex[8] = "#22C864";
+	bool detailedSoldiers = true; // #123 articulated figures (render-only)
+	bool saveReplays = true;      // #107: write a .toyrec per authoritative match
 };
 
 // v0.8: push a host to the top of the recent list (dedup by ip+port).
@@ -71,6 +77,8 @@ void settingsAddRecentHost(Settings& s, const char* name, const char* ip, int po
 
 // v1.0 #186: plain-text match history next to settings.ini (append-only, read last N).
 const char* historyPath();
+// v1.2 #107: replay directory, trailing separator included, auto-created.
+const char* replayDirPath();
 bool historyAppend(const char* line);
 // Fills out[0..returned-1] with the most recent lines, newest first (max 20).
 int historyReadLast(char out[][160], int maxLines);

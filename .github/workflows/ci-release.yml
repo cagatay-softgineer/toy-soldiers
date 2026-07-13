@@ -148,15 +148,64 @@ jobs:
             -DTOY_BOX3D_DIR="$GITHUB_WORKSPACE/box3d-src"
           cmake --build build --parallel
 
-      # verify.ps1 is Windows-shaped; run the same 8 headless gates directly.
+      # verify.ps1 is Windows-shaped; run the same headless gates directly.
       - name: Run headless gates
         run: |
           set -e
-          for t in toy_sim toy_event_test toy_cosmetic_test toy_mode_test toy_content_test toy_balance_report toy_net_test toy_golden_seed_test; do
+          for t in toy_sim toy_event_test toy_cosmetic_test toy_mode_test toy_content_test toy_balance_report toy_net_test toy_golden_seed_test toy_lockstep_test toy_replay_test; do
             echo "=== $t ==="
             ./build/bin/$t
           done
           echo "linux verify OK - all gates passed"
+
+  macos-test:
+    name: Build & test (macOS / Metal)
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout toy-soldiers
+        uses: actions/checkout@v7
+
+      - name: Checkout Box3D (pinned)
+        uses: actions/checkout@v7
+        with:
+          repository: erincatto/box3d
+          ref: ${{ env.BOX3D_REF }}
+          path: box3d-src
+
+      - name: Cache FetchContent
+        uses: actions/cache@v6
+        with:
+          path: box3d-src/.fetchcontent-cache
+          key: fetchcontent-macos-${{ hashFiles('CMakeLists.txt') }}
+
+      - name: Install Ninja
+        run: brew install ninja
+
+      - name: Configure & build
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DTOY_BOX3D_DIR="$GITHUB_WORKSPACE/box3d-src"
+          cmake --build build --parallel
+
+      # #161: headless gates only — sokol_app can't open a window on a
+      # GPU-less CI runner, so this proves the Metal/AppKit backend *builds*
+      # (sokol_impl.m, AudioToolbox link) and the game logic runs, not that a
+      # window paints. A real smoke test needs a physical Mac; see the note
+      # this step logs.
+      - name: Run headless gates
+        run: |
+          set -e
+          for t in toy_sim toy_event_test toy_cosmetic_test toy_mode_test toy_content_test toy_balance_report toy_net_test toy_golden_seed_test toy_lockstep_test toy_replay_test; do
+            echo "=== $t ==="
+            ./build/bin/$t
+          done
+          echo "macos verify OK - all headless gates passed"
+          echo "NOTE: toy_soldiers.app (Metal/AppKit window) built but was not launched — CI runners have no display/GPU to smoke-test rendering."
+
+      - name: Confirm GUI target built
+        run: test -e build/bin/toy_soldiers || (echo "toy_soldiers executable missing" && exit 1)
 
   continuous-release:
     name: Rolling continuous pre-release

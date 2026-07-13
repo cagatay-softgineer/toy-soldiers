@@ -583,10 +583,158 @@ int main()
 		std::printf("OK 4-seat loopback stress (turns=%d)\n", hm.turnNumber);
 	}
 
+	// --- v1.2 #95/#96: compression round-trip + delta apply/desync recovery ---
+	{
+		Match m;
+		MatchConfig cfg;
+		cfg.seed = 424;
+		startMatch(m, cfg);
+		const auto full = serializeMatch(m);
+		CHECK(full.size() > 2048, "snapshot big enough to hit the compression path");
+		const auto comp = net::makeCompressedState(static_cast<uint8_t>(net::MsgType::MatchState), full.data(), full.size());
+		CHECK(!comp.empty() && comp.size() < full.size(), "lz4 actually shrinks the snapshot");
+		net::MsgHeader hdr{};
+		const uint8_t* payload = nullptr;
+		size_t psz = 0;
+		CHECK(net::parseHeader(comp.data(), comp.size(), hdr, payload, psz), "compressed header parses");
+		uint8_t innerType = 0;
+		std::vector<uint8_t> raw;
+		CHECK(net::readCompressedState(payload, psz, innerType, raw), "decompress ok");
+		CHECK(raw == full, "lossless round-trip");
+
+		// Delta: base state -> play a card -> delta applies cleanly on a copy of base.
+		Match base = m;
+		autoPlayBest(m);
+		const auto delta = serializeMatchDelta(m, base);
+		// A one-play delta re-sends the log tail + up to 2 dirty players, so the win vs a
+		// full 4-player snapshot is meaningful but not dramatic at this game size.
+		CHECK(delta.size() < full.size(), "delta smaller than full snapshot");
+		Match noop = m;
+		const auto idleDelta = serializeMatchDelta(m, noop);
+		CHECK(idleDelta.size() < full.size() / 2, "no-change delta drops all player blobs");
+		Match clientCopy = base;
+		CHECK(applyMatchDelta(clientCopy, delta.data(), delta.size()) == DeltaResult::Ok, "delta applies");
+		CHECK(clientCopy.syncGeneration == m.syncGeneration && clientCopy.turnNumber == m.turnNumber,
+			  "delta reproduces head state");
+		for (int i = 0; i < m.config.playerCount; ++i) {
+			CHECK(clientCopy.players[static_cast<size_t>(i)].towerHp == m.players[static_cast<size_t>(i)].towerHp,
+				  "delta HP matches");
+		}
+		// Desync: applying the same delta again must demand a resync, not corrupt state.
+		CHECK(applyMatchDelta(clientCopy, delta.data(), delta.size()) == DeltaResult::NeedResync,
+			  "stale delta demands resync");
+		std::printf("OK compression + delta unit\n");
+	}
+
+	// --- v1.2 #111: spectator joins, watches, never takes a seat ---
+	{
+		Match hm, sm;
+		NetSession host, spec;
+		MatchConfig cfg;
+		cfg.seed = 505;
+		cfg.fillEmptyWithAI = true;
+		CHECK(host.hostLobby(hm, cfg, "SpecHost", 27140), "spec host lobby");
+		CHECK(spec.joinLobby(sm, "127.0.0.1", 27140, "Watcher", true), "spectator connects");
+		bool welcomed = false;
+		for (int i = 0; i < 300 && !welcomed; ++i) {
+			pump(host, hm, spec, sm, 1);
+			welcomed = spec.localSeat() == kSpectatorSeat;
+		}
+		CHECK(welcomed, "spectator welcomed with spectator seat");
+		CHECK(spec.isSpectator(), "isSpectator flag");
+		int taken = 0;
+		for (int i = 0; i < hm.config.playerCount; ++i) {
+			if (hm.players[static_cast<size_t>(i)].control == SeatControl::HumanRemote) {
+				++taken;
+			}
+		}
+		CHECK(taken == 0, "spectator takes no seat");
+		// v1.2 #84: banner color propagates.
+		host.hostSetBannerColor(hm, 5);
+		CHECK(host.hostStartMatch(hm), "spec match starts");
+		pump(host, hm, spec, sm, 30);
+		CHECK(sm.phase == Phase::Playing, "spectator sees the match");
+		CHECK(sm.bannerColor == 5, "banner color reaches spectator");
+		host.shutdown(&hm);
+		spec.shutdown(&sm);
+		std::printf("OK spectator + banner\n");
+	}
+
+	// --- v1.2 #101/#102: host migration — election, adoption, name-reattach ---
+	{
+		Match hm, c1m, c2m;
+		NetSession host, c1, c2;
+		MatchConfig cfg;
+		cfg.seed = 606;
+		cfg.fillEmptyWithAI = true;
+		CHECK(host.hostLobby(hm, cfg, "DoomedHost", 27141), "doomed host lobby");
+		CHECK(c1.joinLobby(c1m, "127.0.0.1", 27141, "Alpha"), "alpha joins");
+		CHECK(waitForJoin(host, hm, c1, c1m), "alpha seated");
+		CHECK(c2.joinLobby(c2m, "127.0.0.1", 27141, "Bravo"), "bravo joins");
+		bool bravoIn = false;
+		for (int i = 0; i < 400 && !bravoIn; ++i) {
+			host.update(hm);
+			c1.update(c1m);
+			c2.update(c2m);
+			std::this_thread::sleep_for(std::chrono::milliseconds(2));
+			bravoIn = c2.localSeat() >= 1;
+		}
+		CHECK(bravoIn, "bravo seated");
+		const int alphaSeat = c1.localSeat();
+		const int bravoSeat = c2.localSeat();
+		// let peer IPs propagate to everyone
+		for (int i = 0; i < 40; ++i) {
+			host.update(hm);
+			c1.update(c1m);
+			c2.update(c2m);
+			std::this_thread::sleep_for(std::chrono::milliseconds(2));
+		}
+		CHECK(c2m.peerIp[alphaSeat][0] != '\0', "bravo knows the alpha peer ip");
+
+		// Host vanishes without a goodbye.
+		host.shutdown(&hm);
+		bool c1Lost = false, c2Lost = false;
+		for (int i = 0; i < 400 && !(c1Lost && c2Lost); ++i) {
+			c1.update(c1m);
+			c2.update(c2m);
+			std::this_thread::sleep_for(std::chrono::milliseconds(2));
+			c1Lost = c1.connectionLost();
+			c2Lost = c2.connectionLost();
+		}
+		CHECK(c1Lost && c2Lost, "both survivors notice the host loss");
+
+		// Election: lowest surviving seat (alpha) becomes the new authority.
+		const auto p1 = c1.planMigration(c1m, 27141);
+		const auto p2 = c2.planMigration(c2m, 27141);
+		CHECK(p1.role == NetSession::MigrationPlan::Role::BecomeHost, "alpha elected host");
+		CHECK(p2.role == NetSession::MigrationPlan::Role::JoinNewHost, "bravo told to rejoin");
+		CHECK(p2.newHostSeat == alphaSeat, "bravo agrees on the new host seat");
+
+		c1.clearConnectionLost();
+		c2.clearConnectionLost();
+		CHECK(c1.hostAdoptMatch(c1m, 27141, "Alpha"), "alpha adopts the match");
+		CHECK(c1.mode() == AppMode::Host && c1.localSeat() == alphaSeat, "alpha hosts from the same seat");
+		CHECK(c1m.players[0].control == SeatControl::AI, "vanished host seat handed to AI");
+
+		CHECK(c2.joinLobby(c2m, p2.ip, p2.port, "Bravo"), "bravo rejoins the new host");
+		bool reattached = false;
+		for (int i = 0; i < 500 && !reattached; ++i) {
+			c1.update(c1m);
+			c2.update(c2m);
+			std::this_thread::sleep_for(std::chrono::milliseconds(2));
+			reattached = c2.localSeat() == bravoSeat &&
+						 c1m.players[static_cast<size_t>(bravoSeat)].control == SeatControl::HumanRemote;
+		}
+		CHECK(reattached, "bravo reattached to the old seat by name");
+		c1.shutdown(&c1m);
+		c2.shutdown(&c2m);
+		std::printf("OK host migration\n");
+	}
+
 	if (g_fails) {
 		std::printf("%d failure(s)\n", g_fails);
 		return 1;
 	}
-	std::printf("OK v0.8 net tests\n");
+	std::printf("OK v1.2 net tests\n");
 	return 0;
 }

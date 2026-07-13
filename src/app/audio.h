@@ -36,9 +36,9 @@ void audioSetVolumes(float master, float sfx, float music);
 // v1.0 #199: duck everything to ~15% while the window is unfocused.
 void audioSetDucked(bool ducked);
 
-void sfxPlay(Sfx s);
+void sfxPlay(Sfx s, float pan = 0.0f); // pan: -1 left .. +1 right (#135)
 // #132: short stinger themed per world event.
-void sfxEventStinger(EventKind kind);
+void sfxEventStinger(EventKind kind, float pan = 0.0f);
 // #133: switch background loop (no-op if already playing).
 void musicPlay(MusicTrack t);
 

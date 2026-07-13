@@ -42,6 +42,11 @@ uint32_t seedCommitHash(uint32_t seed);
 // Order-independent deck fingerprint (multiset of defIds).
 uint32_t deckCheckHash(const std::vector<CardInstance>& deck);
 
+// v1.2 #151: deterministic weekly "featured deck tweak" suggestion (ban one common,
+// try one sideboard card). Pure suggestion — applied only via the normal deck-mods path.
+// weekOverride >= 0 forces a specific week (tests); -1 = current ISO-ish week.
+void featuredWeeklyTweak(int& banDefOut, int& addDefOut, char* textOut, int textCap, long long weekOverride = -1);
+
 void shuffleInPlace(std::vector<CardInstance>& cards, uint32_t& rngState);
 
 } // namespace toy

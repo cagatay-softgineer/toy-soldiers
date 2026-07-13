@@ -3,6 +3,7 @@
 #include "game/cards.h"
 #include "game/cosmetics.h"
 #include "game/events.h"
+#include "game/replay.h"
 #include "game/rules.h"
 
 #include <cstdio>
@@ -154,6 +155,8 @@ void startMatchFromLobby(Match& match)
 	}
 
 	match.rng = match.config.seed ? match.config.seed : 1u;
+	// v1.2 #107: independent decision-only stream — see the field comment in match.h.
+	match.aiRng = match.config.seed ? (match.config.seed ^ 0x41495244u) : 1u; // 'AIRD' salt
 	match.nextInstanceId = 1;
 	match.nextSoldierId = 1;
 	match.activePlayer = 0;
@@ -174,9 +177,9 @@ void startMatchFromLobby(Match& match)
 		applyTowerStats(p, match.config.mode);
 		// Teams2v2 (#54): 0&2 vs 1&3.
 		p.team = (match.config.mode == GameMode::Teams2v2) ? (i % 2) : -1;
-		// AI personalities (#59) — deterministic from match rng.
+		// AI personalities (#59) — deterministic from aiRng (decision-only, #107).
 		if (p.control == SeatControl::AI) {
-			p.persona = static_cast<AiPersona>(randRange(match.rng, 1, 3)); // Aggro/Turtle/Chaos
+			p.persona = static_cast<AiPersona>(randRange(match.aiRng, 1, 3)); // Aggro/Turtle/Chaos
 		} else {
 			p.persona = AiPersona::Balanced;
 		}
@@ -373,10 +376,10 @@ int scoreCandidate(Match& match, const AiCandidate& c, AiLevel level, AiPersona 
 			const Player& tp = match.players[static_cast<size_t>(c.target)];
 			score = (tp.shieldTurns > 0) ? 12 : -20;
 		} else if (def->keywords & KwAOE) {
-			score = c.estDamage * 6 + randRange(match.rng, 0, 8);
+			score = c.estDamage * 6 + randRange(match.aiRng, 0, 8);
 		} else {
 			const Player& tp = match.players[static_cast<size_t>(c.target)];
-			score = c.estDamage * 6 - tp.towerHp / 3 + randRange(match.rng, 0, level == AiLevel::Hard ? 4 : 12);
+			score = c.estDamage * 6 - tp.towerHp / 3 + randRange(match.aiRng, 0, level == AiLevel::Hard ? 4 : 12);
 			if (tp.shieldTurns > 0 && !(def->keywords & KwPierce)) {
 				score -= 5; // prefer unshielded
 			}
@@ -389,10 +392,10 @@ int scoreCandidate(Match& match, const AiCandidate& c, AiLevel level, AiPersona 
 			}
 		}
 	} else if (def->klass == CardClass::Event) {
-		score = 3 + randRange(match.rng, 0, 6);
+		score = 3 + randRange(match.aiRng, 0, 6);
 	} else if (def->id == 27) {
 		// Line Cutter: worth more the healthier the next player is.
-		score = 5 + randRange(match.rng, 0, 4);
+		score = 5 + randRange(match.aiRng, 0, 4);
 	} else {
 		// Defense / tactics.
 		score = (def->klass == CardClass::Defense) ? 6 : 4;
@@ -405,15 +408,18 @@ int scoreCandidate(Match& match, const AiCandidate& c, AiLevel level, AiPersona 
 		if (level == AiLevel::Hard && (def->keywords & KwHeal) && p.towerHp >= p.towerMaxHp - 1) {
 			score -= 10; // don't heal at full
 		}
-		score += randRange(match.rng, 0, 4);
+		score += randRange(match.aiRng, 0, 4);
 	}
-	score += personaAdjust(persona, def->klass, match.rng);
+	// v1.2 #107: all AI decision noise lives on aiRng — never on match.rng — so a replay
+	// that skips AI selection and just re-applies the recorded (hand, target) reproduces
+	// match.rng bit-for-bit (draws/shuffles/event rolls are the only consumers of it).
+	score += personaAdjust(persona, def->klass, match.aiRng);
 	return score;
 }
 
 } // namespace
 
-bool autoPlayBest(Match& match)
+bool autoPlayBest(Match& match, ReplayRecorder* recorder)
 {
 	if (match.phase != Phase::Playing) {
 		return false;
@@ -429,6 +435,9 @@ bool autoPlayBest(Match& match)
 
 	if (candidates.empty()) {
 		// #61: never softlock — always end the turn.
+		if (recorder) {
+			recorder->recordEndTurn();
+		}
 		endTurn(match);
 		bumpSync(match);
 		return true;
@@ -436,8 +445,8 @@ bool autoPlayBest(Match& match)
 
 	int pick = -1;
 	if (level == AiLevel::Easy) {
-		// #58 Easy: any random legal play.
-		pick = randRange(match.rng, 0, static_cast<int>(candidates.size()) - 1);
+		// #58 Easy: any random legal play (decision-only — aiRng, #107).
+		pick = randRange(match.aiRng, 0, static_cast<int>(candidates.size()) - 1);
 	} else {
 		int bestScore = -9999;
 		for (int i = 0; i < static_cast<int>(candidates.size()); ++i) {
@@ -449,6 +458,9 @@ bool autoPlayBest(Match& match)
 		}
 	}
 	if (pick < 0) {
+		if (recorder) {
+			recorder->recordEndTurn();
+		}
 		endTurn(match);
 		bumpSync(match);
 		return true;
@@ -458,17 +470,24 @@ bool autoPlayBest(Match& match)
 	const CardClass klass = chosen.klass;
 	const bool ok = applyCardPlay(match, chosen.hand, chosen.target);
 	if (ok) {
+		if (recorder) {
+			recorder->recordPlay(chosen.hand, chosen.target); // #107: record only what actually applied
+		}
 		aiFlavorLine(match, actor, klass);
 		bumpSync(match);
 		return true;
 	}
-	// Defensive fallback (#61): a rejected AI play must not stall the match.
+	// Defensive fallback (#61): a rejected AI play must not stall the match. collectCandidates
+	// only offers canPlayCard()-true options so this should be unreachable, but stay safe.
+	if (recorder) {
+		recorder->recordEndTurn();
+	}
 	endTurn(match);
 	bumpSync(match);
 	return true;
 }
 
-bool autoPlayIfAITurn(Match& match)
+bool autoPlayIfAITurn(Match& match, ReplayRecorder* recorder)
 {
 	if (match.phase != Phase::Playing) {
 		return false;
@@ -477,7 +496,7 @@ bool autoPlayIfAITurn(Match& match)
 	if (p.control != SeatControl::AI || p.eliminated) {
 		return false;
 	}
-	return autoPlayBest(match);
+	return autoPlayBest(match, recorder);
 }
 
 } // namespace toy

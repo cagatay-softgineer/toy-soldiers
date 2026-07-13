@@ -9,6 +9,7 @@
 #include "game/rules.h"
 #include "game/summary.h"
 #include "physics/table_scene.h" // v1.1 #141 felt dye names
+#include "render/qr_texture.h"
 
 #include "imgui.h"
 #include "sokol_app.h"
@@ -110,13 +111,17 @@ void uiApplySettings(UiState& ui, const Settings& s)
 	}
 	ui.largeLogFont = s.largeLogFont;
 	ui.feltDyeIndex = s.feltDyeIndex;
+	ui.useCustomHex = s.useCustomHex;
+	std::snprintf(ui.customHex, sizeof(ui.customHex), "%s", s.customHex);
+	ui.detailedSoldiers = s.detailedSoldiers;
+	ui.saveReplays = s.saveReplays;
 	for (int i = 0; i < Settings::kRecentHostMax; ++i) {
 		std::snprintf(ui.recentHosts[i], sizeof(ui.recentHosts[i]), "%s", s.recentHosts[i]);
 	}
 	if (ui.reducedMotion) {
 		ui.autoOrbit = false;
 	}
-	i18nSetLang(s.language == 1 ? Lang::Tr : Lang::En);
+	i18nSetLang(static_cast<Lang>(s.language));
 }
 
 void uiCaptureSettings(const UiState& ui, Settings& s)
@@ -158,6 +163,10 @@ void uiCaptureSettings(const UiState& ui, Settings& s)
 	}
 	s.largeLogFont = ui.largeLogFont;
 	s.feltDyeIndex = ui.feltDyeIndex;
+	s.useCustomHex = ui.useCustomHex;
+	std::snprintf(s.customHex, sizeof(s.customHex), "%s", ui.customHex);
+	s.detailedSoldiers = ui.detailedSoldiers;
+	s.saveReplays = ui.saveReplays;
 	for (int i = 0; i < Settings::kRecentHostMax; ++i) {
 		std::snprintf(s.recentHosts[i], sizeof(s.recentHosts[i]), "%s", ui.recentHosts[i]);
 	}
@@ -431,7 +440,8 @@ void drawHowToPlaySteps(UiState& ui)
 	ImGui::BulletText("%s", tr("glossary.world_event"));
 	ImGui::BulletText("%s", tr("glossary.host"));
 	ImGui::Separator();
-	ImGui::BulletText("LMB orbit · Scroll zoom · 1-5 hand · Enter play · H help · Esc pause");
+	ImGui::BulletText("LMB orbit · Scroll zoom · 1-8 hand · Enter play · H help · Esc pause");
+	ImGui::BulletText("P photo mode · G export last 3s as GIF · Shift+G vertical (TikTok/Shorts)");
 	ImGui::BulletText("Protocol v%u · Default port %u", static_cast<unsigned>(kProtocolVersion),
 					  static_cast<unsigned>(kDefaultPort));
 	if (ImGui::Button("Got it", ImVec2(-1, 36))) {
@@ -513,6 +523,17 @@ void drawLoadoutEditors(Match& match, NetSession& session, UiState& ui, int seat
 		if (modChanged) {
 			const int banned[2] = { ban0, ban1 };
 			const int extras[2] = { ex0, ex1 };
+			session.requestSetDeckMods(match, banned, extras);
+		}
+		// v1.2 #151: rotating weekly suggestion, one click to apply through deck mods.
+		int fBan = 0, fAdd = 0;
+		char fText[128];
+		featuredWeeklyTweak(fBan, fAdd, fText, static_cast<int>(sizeof(fText)));
+		ImGui::Separator();
+		ImGui::TextColored(ImVec4(0.96f, 0.77f, 0.36f, 1.0f), "%s", fText);
+		if (ImGui::SmallButton(tr("lobby.featured_apply"))) {
+			const int banned[2] = { fBan, 0 };
+			const int extras[2] = { fAdd, 0 };
 			session.requestSetDeckMods(match, banned, extras);
 		}
 		ImGui::TreePop();
@@ -761,6 +782,9 @@ void drawMenuV2(LanDiscovery& discovery, UiState& ui)
 		}
 		ImGui::TreePop();
 	}
+
+	// v1.2 #111: watch without playing.
+	ImGui::Checkbox(tr("menu.spectate"), &ui.joinAsSpectator);
 
 	// #87: manual IP tucked behind an advanced collapse.
 	if (ImGui::TreeNode(tr("menu.manual_ip"))) {
@@ -1126,6 +1150,20 @@ void drawSettings(UiState& ui)
 		ui.language = 1;
 		i18nSetLang(Lang::Tr);
 	}
+	// v1.2 #157: partial stubs — core menus translated, EN fallback elsewhere.
+	ImGui::SameLine();
+	if (ImGui::RadioButton("Deutsch*", ui.language == 2)) {
+		ui.language = 2;
+		i18nSetLang(Lang::De);
+	}
+	ImGui::SameLine();
+	if (ImGui::RadioButton("Italiano*", ui.language == 3)) {
+		ui.language = 3;
+		i18nSetLang(Lang::It);
+	}
+	if (ui.language >= 2) {
+		ImGui::TextDisabled("* partial translation — falls back to English");
+	}
 
 	ImGui::TextUnformatted("UI scale");
 	if (ImGui::RadioButton("100%", ui.uiScalePercent == 100)) {
@@ -1160,6 +1198,27 @@ void drawSettings(UiState& ui)
 			ImGui::EndCombo();
 		}
 		ImGui::TextDisabled("%s", tr("settings.felt_dye_hint"));
+	}
+	// v1.2 #147: local plastic hex override.
+	if (ImGui::Checkbox(tr("settings.custom_hex"), &ui.useCustomHex)) {
+		ui.settingsDirty = true;
+	}
+	if (ui.useCustomHex) {
+		ImGui::SameLine();
+		ImGui::SetNextItemWidth(90);
+		if (ImGui::InputText("##hex", ui.customHex, sizeof(ui.customHex))) {
+			ui.settingsDirty = true;
+		}
+		ImGui::SameLine();
+		ImGui::TextDisabled("#RRGGBB, your screen only");
+	}
+	// v1.2 #123: articulated toy figures (render-only; disable for max FPS).
+	if (ImGui::Checkbox(tr("settings.detailed_soldiers"), &ui.detailedSoldiers)) {
+		ui.settingsDirty = true;
+	}
+	// v1.2 #107: local .toyrec recording of every match (dispute review).
+	if (ImGui::Checkbox(tr("settings.save_replays"), &ui.saveReplays)) {
+		ui.settingsDirty = true;
 	}
 
 	ImGui::Separator();
@@ -1234,6 +1293,32 @@ void drawLobbyScreen(Match& match, NetSession& session, UiState& ui)
 	ImGui::Text("Protocol v%u · Seat %d · Sync %u", static_cast<unsigned>(kProtocolVersion), session.localSeat(),
 				match.syncGeneration);
 
+	// v1.2 #84: banner color strip (host picks, everyone sees).
+	{
+		static const ImVec4 kBanner[8] = {
+			ImVec4(0.96f, 0.77f, 0.36f, 1.0f), ImVec4(0.85f, 0.25f, 0.25f, 1.0f),
+			ImVec4(0.25f, 0.55f, 0.90f, 1.0f), ImVec4(0.30f, 0.75f, 0.40f, 1.0f),
+			ImVec4(0.75f, 0.45f, 0.90f, 1.0f), ImVec4(0.95f, 0.55f, 0.20f, 1.0f),
+			ImVec4(0.30f, 0.85f, 0.80f, 1.0f), ImVec4(0.90f, 0.50f, 0.70f, 1.0f),
+		};
+		const ImVec4 bc = kBanner[match.bannerColor % 8];
+		ImGui::PushStyleColor(ImGuiCol_Text, bc);
+		ImGui::TextUnformatted("=====================================");
+		ImGui::PopStyleColor();
+		if (session.mode() == AppMode::Host && match.phase == Phase::Lobby) {
+			for (int b = 0; b < 8; ++b) {
+				ImGui::PushID(700 + b);
+				if (ImGui::ColorButton("##bnr", kBanner[b], ImGuiColorEditFlags_NoTooltip, ImVec2(20, 14))) {
+					session.hostSetBannerColor(match, static_cast<uint8_t>(b));
+				}
+				ImGui::PopID();
+				if (b < 7) {
+					ImGui::SameLine(0, 3);
+				}
+			}
+		}
+	}
+
 	// v0.8 #82/#85: room code + copy join info (host only).
 	if (session.mode() == AppMode::Host && session.roomCode()[0]) {
 		ImGui::TextColored(ImVec4(0.96f, 0.77f, 0.36f, 1.0f), "Room code: %s  (port %u)", session.roomCode(),
@@ -1244,6 +1329,22 @@ void drawLobbyScreen(Match& match, NetSession& session, UiState& ui)
 			std::snprintf(clip, sizeof(clip), "Room %s — port %u", session.roomCode(),
 						  static_cast<unsigned>(session.listenPort()));
 			ImGui::SetClipboardText(clip);
+		}
+
+		// v1.2 #90: QR code for the room code (local network) — lets someone on the
+		// same LAN photograph the join info off a shared screen instead of retyping
+		// it. Rebuilt only when the encoded text actually changes.
+		static char qrLastText[64] = {};
+		static QrTexture qrTex;
+		char qrText[64];
+		std::snprintf(qrText, sizeof(qrText), "TOYSOLDIERS ROOM %s PORT %u", session.roomCode(),
+					  static_cast<unsigned>(session.listenPort()));
+		if (std::strcmp(qrText, qrLastText) != 0) {
+			qrTextureBuild(qrText, qrTex);
+			std::snprintf(qrLastText, sizeof(qrLastText), "%s", qrText);
+		}
+		if (qrTex.valid) {
+			ImGui::Image(simgui_imtextureid(qrTex.view), ImVec2(120, 120));
 		}
 	}
 	// #83: client-side connection freshness.
@@ -1427,10 +1528,13 @@ void drawLobbyScreen(Match& match, NetSession& session, UiState& ui)
 	}
 
 	const int seat = session.localSeat() >= 0 ? session.localSeat() : 0;
-	if (match.phase == Phase::Lobby &&
+	if (match.phase == Phase::Lobby && !session.isSpectator() &&
 		(session.mode() == AppMode::Host || session.mode() == AppMode::Client || session.mode() == AppMode::Offline)) {
 		ImGui::Separator();
 		drawLoadoutEditors(match, session, ui, seat);
+	}
+	if (session.isSpectator()) {
+		ImGui::TextColored(ImVec4(0.7f, 0.85f, 1.0f, 1.0f), "%s", tr("lobby.spectating"));
 	}
 
 	if (session.mode() == AppMode::Client && match.phase == Phase::Lobby && session.localSeat() >= 0) {
@@ -1575,8 +1679,7 @@ void drawMatchHud(Match& match, NetSession& session, UiState& ui)
 
 	if (session.mode() == AppMode::Offline) {
 		if (ImGui::Button(tr("match.auto"))) {
-			autoPlayBest(match);
-			bumpSync(match);
+			session.autoPlay(match); // #107: routed through the session for replay recording
 		}
 		ImGui::SameLine();
 		if (ImGui::Button(tr("match.end_turn"))) {
@@ -1601,8 +1704,9 @@ void drawMatchHud(Match& match, NetSession& session, UiState& ui)
 		ImGui::Separator();
 		ImGui::TextColored(ImVec4(0.96f, 0.77f, 0.36f, 1.0f), "Sandbox spawns");
 		const EventKind kinds[] = { EventKind::Sandstorm, EventKind::Rain,  EventKind::Flood, EventKind::Cat,
-									EventKind::Dog,       EventKind::Blackout, EventKind::None };
-		for (int k = 0; k < 7; ++k) {
+									EventKind::Dog,       EventKind::Blackout, EventKind::Ants,
+									EventKind::Titan,     EventKind::None };
+		for (int k = 0; k < 9; ++k) {
 			if (k % 4 != 0) {
 				ImGui::SameLine();
 			}
@@ -2044,6 +2148,11 @@ void drawResults(Match& match, NetSession& session, UiState& ui)
 		ui.selectedHand = -6;
 		ui.screen = AppScreen::Menu;
 	}
+	// v1.2 #188: shareable result card — main.cpp captures the window to PNG next frame
+	// (deferred so this button/window is not itself in the shot).
+	if (ImGui::Button(tr("results.export_card"), ImVec2(-1, 32))) {
+		ui.wantExportResultCard = true;
+	}
 	ImGui::End();
 
 	// P2 #25: read-only match timeline scrubber on results
@@ -2056,7 +2165,7 @@ void uiDraw(Match& match, NetSession& session, LanDiscovery& discovery, UiState&
 {
 	applyTheme(ui);
 	applyUiScale(ui);
-	i18nSetLang(ui.language == 1 ? Lang::Tr : Lang::En);
+	i18nSetLang(static_cast<Lang>(ui.language));
 	drawToastsAndBanners(match, ui);
 
 	if (ui.showHowToPlay) {

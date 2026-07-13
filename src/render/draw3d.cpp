@@ -64,6 +64,8 @@ vs_out main(vs_in inp) {
   float lum = light.w + (1.0 - light.w) * ndl;
   // Cheap plastic sheen: extra pop on strongly lit faces.
   lum += 0.15 * pow(ndl, 8.0);
+  // v1.2 #122 AO-lite: object-space grounding — lower verts sit in soft contact shadow.
+  lum *= 0.80 + 0.20 * saturate((inp.pos.y + 1.0) * 0.5 + 0.25);
   outp.color = float4(inp.icolor.rgb * lum, inp.icolor.a);
   outp.pos = mul(view_proj, world);
   return outp;
@@ -95,6 +97,7 @@ vertex vs_out main0(vs_in in [[stage_in]], constant params_t& p [[buffer(0)]]) {
   float3 n = normalize((float3x3(model[0].xyz, model[1].xyz, model[2].xyz)) * in.nrm);
   float ndl = max(dot(n, p.light.xyz), 0.0);
   float lum = p.light.w + (1.0 - p.light.w) * ndl + 0.15 * pow(ndl, 8.0);
+  lum *= 0.80 + 0.20 * clamp((in.pos.y + 1.0) * 0.5 + 0.25, 0.0, 1.0); // AO-lite (#122)
   out.color = float4(in.icolor.rgb * lum, in.icolor.a);
   out.pos = p.view_proj * world;
   return out;
@@ -126,6 +129,7 @@ void main() {
   vec3 n = normalize(mat3(model) * normal);
   float ndl = max(dot(n, light.xyz), 0.0);
   float lum = light.w + (1.0 - light.w) * ndl + 0.15 * pow(ndl, 8.0);
+  lum *= 0.80 + 0.20 * clamp((position.y + 1.0) * 0.5 + 0.25, 0.0, 1.0); // AO-lite (#122)
   color = vec4(icolor.rgb * lum, icolor.a);
   gl_Position = view_proj * world;
 }
@@ -368,6 +372,31 @@ void Draw3D::flush()
 	sg_draw(0, 36, static_cast<int>(instances_.size()));
 }
 
+// v1.2 #123: render a soldier as a small articulated figure (body/head/pack/rifle)
+// instead of one slab. Pure presentation — physics stays a single box.
+void Draw3D::pushDetailedSoldier(const b3WorldTransform& xf, b3Vec3 half, b3Vec3 color)
+{
+	const b3Matrix3 r = b3MakeMatrixFromQuat(xf.q);
+	auto place = [&](b3Vec3 localOff, b3Vec3 he, b3Vec3 c) {
+		b3WorldTransform part = xf;
+		part.p.x = xf.p.x + r.cx.x * localOff.x + r.cy.x * localOff.y + r.cz.x * localOff.z;
+		part.p.y = xf.p.y + r.cx.y * localOff.x + r.cy.y * localOff.y + r.cz.y * localOff.z;
+		part.p.z = xf.p.z + r.cx.z * localOff.x + r.cy.z * localOff.y + r.cz.z * localOff.z;
+		pushBox(part, he, c);
+	};
+	const b3Vec3 dark{ color.x * 0.8f, color.y * 0.8f, color.z * 0.8f };
+	// torso (slimmer than the physics box)
+	place({ 0.0f, -half.y * 0.15f, 0.0f }, { half.x * 0.8f, half.y * 0.62f, half.z * 0.9f }, color);
+	// head
+	place({ 0.0f, half.y * 0.72f, 0.0f }, { half.x * 0.55f, half.y * 0.26f, half.z * 0.7f }, color);
+	// helmet brim
+	place({ 0.0f, half.y * 0.95f, 0.0f }, { half.x * 0.7f, half.y * 0.08f, half.z * 0.9f }, dark);
+	// rifle along +x side
+	place({ half.x * 1.15f, half.y * 0.1f, 0.0f }, { half.x * 0.22f, half.y * 0.5f, half.z * 0.3f }, dark);
+	// base plate (classic toy-soldier stand)
+	place({ 0.0f, -half.y * 0.92f, 0.0f }, { half.x * 1.4f, half.y * 0.08f, half.z * 1.6f }, dark);
+}
+
 void Draw3D::drawScene(const TableScene& scene, const RenderFx& fx)
 {
 	const b3Vec3 shadowCol{ fx.shadowR, fx.shadowG, fx.shadowB };
@@ -391,7 +420,11 @@ void Draw3D::drawScene(const TableScene& scene, const RenderFx& fx)
 			}
 			xf.p.y = xf.p.y + lift;
 		}
-		pushBox(xf, v.halfExtents, v.color);
+		if (v.kind == BodyVisual::Kind::Soldier && fx.detailedSoldiers) {
+			pushDetailedSoldier(xf, v.halfExtents, v.color); // #123
+		} else {
+			pushBox(xf, v.halfExtents, v.color);
+		}
 
 		// v0.9 #119: blob shadow under towers + soldiers.
 		if ((v.kind == BodyVisual::Kind::Tower || v.kind == BodyVisual::Kind::Soldier) &&

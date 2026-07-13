@@ -57,7 +57,8 @@ public:
 	bool valid() const { return sock_ != kInvalidSocket; }
 
 	// Non-blocking accept. Returns invalid socket if none pending.
-	TcpSocket accept();
+	// ipOut (optional, 64 bytes): dotted peer address — feeds migration peer lists (#101).
+	TcpSocket accept(char* ipOut = nullptr);
 
 	uint16_t port() const { return port_; }
 

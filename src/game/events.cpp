@@ -48,7 +48,7 @@ int pickLivingSeat(Match& m)
 
 // Weights per map for random rolls (relative ints). v0.9 adds ants + 4 new rooms (#136-#139).
 struct EventWeights {
-	int sand = 0, rain = 0, flood = 0, cat = 0, dog = 0, blackout = 0, ants = 0;
+	int sand = 0, rain = 0, flood = 0, cat = 0, dog = 0, blackout = 0, ants = 0, titan = 0;
 };
 
 EventWeights eventWeightsFor(MapId map)
@@ -56,6 +56,7 @@ EventWeights eventWeightsFor(MapId map)
 	EventWeights w;
 	switch (map) {
 	case MapId::LivingRoom:
+		w.titan = 4; // v1.2 #69: rare boss
 		w.cat = 40;
 		w.rain = 20;
 		w.dog = 15;
@@ -81,6 +82,7 @@ EventWeights eventWeightsFor(MapId map)
 		w.blackout = 5;
 		break;
 	case MapId::KidsBedroom:
+		w.titan = 5;
 		w.cat = 35;
 		w.blackout = 30;
 		w.dog = 10;
@@ -89,6 +91,7 @@ EventWeights eventWeightsFor(MapId map)
 		w.ants = 5;
 		break;
 	case MapId::Garage:
+		w.titan = 4;
 		w.flood = 35; // oil spills
 		w.blackout = 25;
 		w.dog = 10;
@@ -121,7 +124,7 @@ EventWeights eventWeightsFor(MapId map)
 EventKind rollEventKind(Match& m)
 {
 	const EventWeights w = eventWeightsFor(m.config.mapId);
-	const int total = w.sand + w.rain + w.flood + w.cat + w.dog + w.blackout + w.ants;
+	const int total = w.sand + w.rain + w.flood + w.cat + w.dog + w.blackout + w.ants + w.titan;
 	if (total <= 0) {
 		return EventKind::None;
 	}
@@ -144,7 +147,10 @@ EventKind rollEventKind(Match& m)
 	if ((r -= w.blackout) < 0) {
 		return EventKind::Blackout;
 	}
-	return EventKind::Ants;
+	if ((r -= w.ants) < 0) {
+		return EventKind::Ants;
+	}
+	return EventKind::Titan;
 }
 
 void beginEvent(Match& m, EventKind kind, int focus)
@@ -216,6 +222,13 @@ void beginEvent(Match& m, EventKind kind, int focus)
 		// #67: UI fog — enemy HP hidden for 1 turn. No gameplay change.
 		m.world.remainingTurns = 1;
 		std::snprintf(buf, sizeof(buf), "WORLD: Blackout! Enemy tower HP is hidden for 1 turn.");
+		pushWorld(m, -1, static_cast<int>(kind), buf);
+		break;
+	case EventKind::Titan:
+		// v1.2 #69: rare map boss — two full turns of telegraph, then a table-wide stomp. No HP.
+		m.world.remainingTurns = 2;
+		m.world.warning = true;
+		std::snprintf(buf, sizeof(buf), "WORLD: Distant stomping… something HUGE is coming (2 turns).");
 		pushWorld(m, -1, static_cast<int>(kind), buf);
 		break;
 	case EventKind::Ants:
@@ -403,6 +416,14 @@ void formatWorldEventStatus(const Match& match, char* out, int outCap)
 					  match.world.focusSeat >= 0 ? match.players[static_cast<size_t>(match.world.focusSeat)].name : "?",
 					  match.world.remainingTurns);
 		break;
+	case EventKind::Titan:
+		if (match.world.warning) {
+			std::snprintf(out, outCap, "TOY TITAN incoming — stomp in %d turn%s!", match.world.remainingTurns,
+						  match.world.remainingTurns == 1 ? "" : "s");
+		} else {
+			std::snprintf(out, outCap, "Toy Titan dust settling (%d)", match.world.remainingTurns);
+		}
+		break;
 	default:
 		std::snprintf(out, outCap, "Map: %s", mapName(match.config.mapId));
 		break;
@@ -438,6 +459,26 @@ void tickWorldEvents(Match& match)
 	if (match.world.kind == EventKind::Cat && match.world.warning) {
 		resolveCatPounce(match);
 		// Don't also decrement this same tick for warning→pounce clarity.
+		return;
+	}
+
+	// v1.2 #69: Titan telegraph counts down, then the stomp hits every seat at once.
+	if (match.world.kind == EventKind::Titan && match.world.warning) {
+		--match.world.remainingTurns;
+		if (match.world.remainingTurns > 0) {
+			char tbuf[120];
+			std::snprintf(tbuf, sizeof(tbuf), "WORLD: The stomping grows LOUDER… (%d turn%s)",
+						  match.world.remainingTurns, match.world.remainingTurns == 1 ? "" : "s");
+			pushWorld(match, -1, static_cast<int>(EventKind::Titan), tbuf);
+		} else {
+			match.world.warning = false;
+			match.world.remainingTurns = 1; // dust settles for one turn
+			pushWorld(match, -1, static_cast<int>(EventKind::Titan),
+					  "WORLD: THE TOY TITAN STOMPS PAST! Every soldier on the table goes flying (no tower damage).");
+			match.pendingPhysicsImpulse.targetPlayer = kImpulseAllSeats;
+			match.pendingPhysicsImpulse.strength = 5.5f;
+			match.pendingPhysicsImpulse.frames = 1;
+		}
 		return;
 	}
 

@@ -4,7 +4,8 @@ Game-jam prototype of **childhood plastic toy soldiers on a tabletop**, powered 
 
 Concept board: [`docs/concept_board.html`](docs/concept_board.html)  
 Design notes: [`docs/GDD.md`](docs/GDD.md)  
-**Roadmap to v1.0 (200 features):** [`docs/ROADMAP_to_v1.md`](docs/ROADMAP_to_v1.md)
+**Roadmap to v1.0 (200 features):** [`docs/ROADMAP_to_v1.md`](docs/ROADMAP_to_v1.md) *(shipped through v1.2)*
+**Roadmap to v2.0 (230 features):** [`docs/ROADMAP_to_v2.md`](docs/ROADMAP_to_v2.md) — online, ranked, workshop, 3D, campaign, mobile
 
 ## Fantasy
 
